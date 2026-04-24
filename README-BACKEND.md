@@ -74,3 +74,53 @@ Karena framework menggunakan SQLAlchemy 2.0 Async, saat pertama kali setup, inis
 alembic init -t async migrations
 ```
 Setelah itu, ubah `migrations/env.py` agar mengimport models dan `settings.SQLALCHEMY_DATABASE_URI`.
+
+---
+
+## 👨‍💻 Backend Developer Guidelines
+
+Berikut adalah panduan lengkap dan best practices bagi para developer backend saat mengerjakan fitur di repositori ini.
+
+### 1. Prinsip Layered Architecture
+Pisahkan antara _Routing_, _Business Logic_, dan _Data Access_ agar kode mudah di-_test_ dan *maintainable*.
+- **`app/api/v1/endpoints/` (Controllers):** Hanya bertugas menerima *request*, memanggil fungsi validasi Pydantic, memanggil *service layer*, dan mengembalikan response HTTP. **Dilarang keras** menaruh _business logic_ atau query database rumit di layer ini.
+- **`app/services/` (Business Logic):** Di sinilah inti dari algoritma aplikasi (seperti _Risk Scoring_, pemanggilan API eksternal, dll).
+- **`app/models/` (Data Access):** Representasi tabel database. Relasi dan *constraint* ditulis di sini.
+- **`app/schemas/` (Pydantic Validation):** Validasi ketat untuk payload *request* dan struktur *response*. Gunakan model yang berbeda untuk Request (`*Create`, `*Update`) dan Response (`*Response`).
+
+### 2. Aturan Database & SQLAlchemy ORM
+- **Selalu Gunakan Async:** Karena kita menggunakan `asyncpg`, pastikan semua interaksi database dilakukan di dalam fungsi `async def` dengan menggunakan `await db.execute(...)`.
+- **Primary Key UUID:** Gunakan UUIDv4 (native Postgres `UUID`) untuk semua `id` utama guna menjaga keamanan (mencegah *ID enumeration*).
+- **Timezone-aware:** Selalu gunakan `DateTime(timezone=True)` dan `func.now()` untuk mencatat *timestamp*.
+- **Row-Level Security (RLS) & Tenancy:** OJSDef adalah platform *SaaS Multi-Tenant*. Semua query data operasional HARUS difilter berdasarkan `tenant_id`. Pastikan Anda selalu mem-passing `tenant_id` atau bergantung pada RLS Postgres.
+
+### 3. Migrasi Database (Alembic)
+Jangan pernah mengubah skema tabel secara manual di DBMS.
+1. Ubah file di `app/models/`.
+2. Generate migrasi baru: `alembic revision --autogenerate -m "Deskripsi perubahan"`
+3. Periksa file hasil generate di `migrations/versions/`. Pastikan tidak ada DROP table yang tidak disengaja.
+4. Terapkan perubahan: `alembic upgrade head`
+
+### 4. Background Tasks & Celery
+Jangan pernah memblokir HTTP *event loop* FastAPI dengan task berat (>500ms).
+- Task pengiriman email, integrasi ke API NVD/CVE, *external scanning*, dan *PDF generation* wajib dimasukkan ke dalam antrean (Queue) Celery (`app/worker/tasks/`).
+- Gunakan `@celery_app.task()` dan *enqueue* dengan `.delay()`.
+- Pastikan task bersifat **Idempotent** (aman jika dieksekusi lebih dari satu kali bila terjadi _retry_ otomatis).
+
+### 5. Error Handling & HTTP Status
+- Gunakan `HTTPException` dari FastAPI dengan status code yang semantik.
+  - `400 Bad Request`: Kesalahan input atau validasi logika gagal.
+  - `401 Unauthorized`: Kredensial tidak valid atau *token expired*.
+  - `403 Forbidden`: User tidak memiliki hak akses (RBAC error).
+  - `404 Not Found`: Data tidak ada / dilindungi RLS dari user lain.
+  - `422 Unprocessable Entity`: Input gagal tervalidasi oleh Pydantic (Otomatis ditangani FastAPI).
+  - `500 Internal Server Error`: Kesalahan *unhandled exception*.
+
+### 6. Git Workflow
+- Gunakan *branching model*:
+  - `main`: Branch produksi, kode harus stabil.
+  - `develop`: Branch integrasi utama.
+  - `feature/{nama-fitur}`: Untuk pengembangan fitur baru (contoh: `feature/cvss-scoring`).
+  - `bugfix/{nama-bug}`: Untuk perbaikan bug.
+- Lakukan *Pull Request (PR)* ke `develop` dan wajib *Code Review* sebelum di-_merge_.
+- Jangan *commit* file rahasia (kredensial, `.env`, dsb). Pastikan sesuai `.gitignore`.

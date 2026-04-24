@@ -45,3 +45,19 @@ Sistem OJSDef membagi beban komputasinya ke beberapa worker mandiri. Saat mengem
 ### 4. Notify Worker (`queue: notifications`)
 - **Tugas:** Menerima *trigger* apabila ditemukan kerentanan berlevel *Critical* atau tugas scan selesai.
 - **Output:** Mengirimkan pesan melalui SMTP (Email) atau API Telegram.
+
+---
+
+## 🗄️ Database Design & Integrasi ORM
+
+Proyek ini telah dikonfigurasi dengan dua entitas dasar: **Tenants** dan **Users**.
+
+- **Lokasi DDL PostgreSQL:** `database/schema.sql` (Berisi DDL murni dan enumerasi untuk Postgres).
+- **Lokasi Model ORM SQLAlchemy:** `app/models/tenant.py` dan `app/models/user.py`.
+
+### Aturan Model Database untuk Agen:
+1. Setiap tabel harus mewarisi dari kelas basis `Base` yang terletak di `app/models/base.py`.
+2. Gunakan `sqlalchemy.dialects.postgresql.UUID` untuk seluruh kolom ID (sebagai primary key maupun foreign key).
+3. Kolom `created_at` dan `updated_at` harus menggunakan `func.now()` untuk auto-timestamp, serta `onupdate=func.now()` untuk update.
+4. Gunakan `Enum` yang didefinisikan dari standar library python `enum.Enum` untuk tipe kolom enumerasi, contoh: `TenantPlan` dan `UserRole`.
+5. Semua koneksi dan query wajib bersifat asinkron via `AsyncSession` (disediakan di `app/db/session.py`). Lihat contoh pengimplementasiannya di `app/api/v1/endpoints/users.py`.
