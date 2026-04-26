@@ -9,6 +9,9 @@ class UserBase(BaseModel):
     full_name: str
     role: UserRole = UserRole.admin_OJS
     is_active: bool = True
+    notif_email: bool = True
+    notif_telegram: bool = False
+    telegram_chat_id: Optional[str] = None
 
 class UserCreate(UserBase):
     tenant_id: UUID
