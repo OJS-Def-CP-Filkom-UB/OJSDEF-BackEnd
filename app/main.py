@@ -1,33 +1,84 @@
+from contextlib import asynccontextmanager
+import redis.asyncio as aioredis
+import boto3
+from botocore.exceptions import ClientError
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.core.config import settings
+from starlette.middleware.base import BaseHTTPMiddleware
+from app.config import get_settings
+from app.database import engine
+from sqlalchemy import text
 
-def create_app() -> FastAPI:
-    app = FastAPI(
-        title=settings.PROJECT_NAME,
-        openapi_url=f"{settings.API_V1_STR}/openapi.json"
-    )
+settings = get_settings()
 
-    # Set all CORS enabled origins
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"], # Should be restricted in production
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
 
-    # Add Routers
-    # app.include_router(api_router, prefix=settings.API_V1_STR)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+    except Exception:
+        pass
+    try:
+        r = aioredis.from_url(settings.redis_url)
+        await r.ping()
+        await r.aclose()
+    except Exception:
+        pass
+    try:
+        s3 = boto3.client(
+            "s3",
+            endpoint_url=f"{'https' if settings.minio_use_ssl else 'http'}://{settings.minio_endpoint}",
+            aws_access_key_id=settings.minio_access_key,
+            aws_secret_access_key=settings.minio_secret_key,
+        )
+        try:
+            s3.head_bucket(Bucket=settings.minio_bucket)
+        except ClientError:
+            s3.create_bucket(Bucket=settings.minio_bucket)
+    except Exception:
+        pass
+    yield
 
-    @app.get("/health", tags=["Health"])
-    async def health_check():
-        return {
-            "status": "ok",
-            "service": settings.PROJECT_NAME,
-            "version": "1.0.0"
-        }
 
-    return app
+app = FastAPI(
+    title="OJSDef API", version="1.0.0", lifespan=lifespan,
+    docs_url="/docs" if settings.environment == "development" else None,
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.allowed_origins_list,
+    allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
+)
 
-app = create_app()
+from app.middleware.auth import jwt_middleware
+from app.middleware.plugin_auth import plugin_auth_middleware
+
+app.add_middleware(BaseHTTPMiddleware, dispatch=plugin_auth_middleware)
+app.add_middleware(BaseHTTPMiddleware, dispatch=jwt_middleware)
+
+if settings.sentry_dsn:
+    import sentry_sdk
+    sentry_sdk.init(dsn=settings.sentry_dsn)
+
+
+@app.get("/health", tags=["health"])
+async def health():
+    return {"status": "ok"}
+
+
+from app.routers import auth as auth_router
+from app.routers import targets as targets_router
+from app.routers import scans as scans_router
+from app.routers import reports as reports_router
+from app.routers import dashboard as dashboard_router
+from app.routers import admin as admin_router
+from app.routers import plugin_callback as plugin_router
+
+app.include_router(auth_router.router)
+app.include_router(targets_router.router)
+app.include_router(scans_router.router)
+app.include_router(reports_router.router)
+app.include_router(dashboard_router.router)
+app.include_router(admin_router.router)
+app.include_router(plugin_router.router)

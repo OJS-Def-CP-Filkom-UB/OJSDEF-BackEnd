@@ -1,116 +1,83 @@
-version: '3.8'
+version: "3.9"
+
+x-app: &app
+  build: .
+  env_file: .env
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
 
 services:
-  db:
-    image: postgres:16-alpine
-    container_name: ojsdef-postgres
+  fastapi:
+    <<: *app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    expose: ["8000"]
+
+  worker-internal:
+    <<: *app
+    command: celery -A app.celery_app worker -Q internal_scan --concurrency=4 --loglevel=info
+
+  worker-external:
+    <<: *app
+    command: celery -A app.celery_app worker -Q external_scan --concurrency=2 --loglevel=info
+
+  worker-scoring:
+    <<: *app
+    command: celery -A app.celery_app worker -Q scoring --concurrency=2 --loglevel=info
+
+  worker-notify:
+    <<: *app
+    command: celery -A app.celery_app worker -Q notifications --concurrency=4 --loglevel=info
+
+  flower:
+    <<: *app
+    command: celery -A app.celery_app flower --port=5555 --basic_auth=${FLOWER_BASIC_AUTH}
+    expose: ["5555"]
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ojsdef
+      POSTGRES_USER: ojsdef
+      POSTGRES_PASSWORD: ojsdef_pass
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    environment:
-      - POSTGRES_USER=ojsdef
-      - POSTGRES_PASSWORD=ojsdef_password
-      - POSTGRES_DB=ojsdef_db
-    ports:
-      - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ojsdef -d ojsdef_db"]
+      test: ["CMD-SHELL", "pg_isready -U ojsdef"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
 
   redis:
     image: redis:7-alpine
-    container_name: ojsdef-redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   minio:
     image: minio/minio
-    container_name: ojsdef-minio
-    ports:
-      - "9000:9000"
-      - "9001:9001"
+    command: server /data --console-address ":9001"
     environment:
-      - MINIO_ROOT_USER=admin
-      - MINIO_ROOT_PASSWORD=password123
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
     volumes:
       - minio_data:/data
-    command: server /data --console-address ":9001"
+    expose: ["9000", "9001"]
 
-  api:
-    build: .
-    container_name: ojsdef-api
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-    volumes:
-      - .:/app
+  nginx:
+    image: nginx:1.25-alpine
     ports:
-      - "8000:8000"
-    environment:
-      - POSTGRES_SERVER=db
-      - REDIS_HOST=redis
-      - MINIO_ENDPOINT=minio:9000
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_started
-
-  celery_internal:
-    build: .
-    container_name: ojsdef-celery-internal
-    command: celery -A app.worker.celery_app worker -Q internal_scan -c 4 --loglevel=info
+      - "80:80"
     volumes:
-      - .:/app
-    environment:
-      - POSTGRES_SERVER=db
-      - REDIS_HOST=redis
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
-      - redis
-      - db
-
-  celery_external:
-    build: .
-    container_name: ojsdef-celery-external
-    command: celery -A app.worker.celery_app worker -Q external_scan -c 2 --loglevel=info
-    volumes:
-      - .:/app
-    environment:
-      - POSTGRES_SERVER=db
-      - REDIS_HOST=redis
-    depends_on:
-      - redis
-      - db
-
-  celery_scoring:
-    build: .
-    container_name: ojsdef-celery-scoring
-    command: celery -A app.worker.celery_app worker -Q scoring -c 2 --loglevel=info
-    volumes:
-      - .:/app
-    environment:
-      - POSTGRES_SERVER=db
-      - REDIS_HOST=redis
-    depends_on:
-      - redis
-      - db
-      
-  celery_beat:
-    build: .
-    container_name: ojsdef-celery-beat
-    command: celery -A app.worker.celery_app beat --loglevel=info
-    volumes:
-      - .:/app
-    environment:
-      - POSTGRES_SERVER=db
-      - REDIS_HOST=redis
-    depends_on:
-      - redis
-      - db
+      - fastapi
+      - flower
 
 volumes:
   postgres_data:
-  redis_data:
   minio_data:

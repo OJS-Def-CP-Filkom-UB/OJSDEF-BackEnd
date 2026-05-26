@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html lang="id"><body style="font-family:Arial,sans-serif">
+<h2 style="color:#d32f2f">[OJSDef] Ancaman Kritis &mdash; {{ target_name }}</h2>
+<p><strong>Target:</strong> {{ target_url }}</p>
+<p><strong>Skor:</strong> {{ overall_score }}/100 ({{ risk_level | upper }})</p>
+<h3>Temuan Kritis:</h3>
+<ul>
+{% for f in findings[:5] %}<li><strong>{{ f.title }}</strong> &mdash; {{ f.remediation }}</li>{% endfor %}
+{% if findings|length > 5 %}<li>... dan {{ findings|length - 5 }} temuan lainnya</li>{% endif %}
+</ul>
+<p><a href="{{ dashboard_url }}">Lihat di Dashboard OJSDef</a></p>
+</body></html>

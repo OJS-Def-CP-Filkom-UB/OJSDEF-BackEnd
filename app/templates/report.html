@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="id"><head><meta charset="UTF-8">
+<style>
+  body{font-family:Arial,sans-serif;font-size:12pt;color:#333}
+  h1{color:#1a237e}
+  table{width:100%;border-collapse:collapse;margin:1em 0}
+  th{background:#1a237e;color:#fff;padding:8px;text-align:left}
+  td{padding:6px 8px;border-bottom:1px solid #ddd}
+  .critical{color:#d32f2f;font-weight:bold}
+  .high{color:#e64a19;font-weight:bold}
+  .medium{color:#f57c00}
+  .low{color:#388e3c}
+</style></head>
+<body>
+<h1>Laporan Keamanan OJS &mdash; {{ target.name }}</h1>
+<p><strong>URL:</strong> {{ target.url }} | <strong>Scan:</strong> {{ job.scan_type }}</p>
+<p><strong>Skor:</strong> {{ "%.1f"|format(job.overall_score or 0) }}/100 &nbsp;|&nbsp;
+   <strong>Risiko:</strong> {{ job.risk_level | upper if job.risk_level else "-" }}</p>
+<table><tr><th>Tingkat</th><th>Jumlah</th></tr>
+<tr><td class="critical">Kritis</td><td>{{ job.critical_count }}</td></tr>
+<tr><td class="high">Berbahaya</td><td>{{ job.high_count }}</td></tr>
+<tr><td class="medium">Perhatian</td><td>{{ job.medium_count }}</td></tr>
+<tr><td class="low">Aman</td><td>{{ job.low_count }}</td></tr>
+</table>
+<h2>Detail Temuan</h2>
+{% for f in findings %}
+<div style="margin-bottom:1.5em;padding:1em;border-left:4px solid
+{% if f.severity=='critical' %}#d32f2f{% elif f.severity=='high' %}#e64a19
+{% elif f.severity=='medium' %}#f57c00{% else %}#388e3c{% endif %}">
+<h3 class="{{ f.severity }}">
+  [{{ severity_label[f.severity] }}] {{ f.title }}
+</h3>
+<p><strong>Deskripsi:</strong> {{ f.description }}</p>
+<p><strong>Path:</strong> <code>{{ f.affected_path }}</code></p>
+<p><strong>Bukti:</strong> {{ f.evidence }}</p>
+<p><strong>Remediasi:</strong> {{ f.remediation }}</p>
+{% if f.cve_id %}<p><strong>CVE:</strong> {{ f.cve_id }}</p>{% endif %}
+</div>
+{% endfor %}
+</body></html>
