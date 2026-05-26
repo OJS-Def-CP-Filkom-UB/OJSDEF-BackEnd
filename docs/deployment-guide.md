@@ -15,7 +15,7 @@
 7. [Deploy dengan Docker Compose](#7-deploy-dengan-docker-compose)
 8. [Migrasi Database dan Seed Data](#8-migrasi-database-dan-seed-data)
 9. [Integrasi Domain Cloudflare](#9-integrasi-domain-cloudflare)
-10. [SSL dengan Let's Encrypt](#10-ssl-dengan-lets-encrypt)
+10. [SSL Manual — Tanpa Cloudflare Proxy (Opsional)](#10-ssl-manual--tanpa-cloudflare-proxy-opsional)
 11. [Monitoring dan Maintenance](#11-monitoring-dan-maintenance)
 12. [Prosedur Update Aplikasi](#12-prosedur-update-aplikasi)
 13. [Debugging dan Troubleshooting](#13-debugging-dan-troubleshooting)
@@ -327,7 +327,15 @@ mkdir -p /opt/ojsdef/backend/nginx
 nano /opt/ojsdef/backend/nginx/nginx.conf
 ```
 
-Ganti semua `api.domainmu.com` dan `flower.domainmu.com` dengan subdomain kamu:
+Ada **dua opsi** konfigurasi Nginx tergantung setup SSL yang dipilih. Jika menggunakan Cloudflare proxy, pilih **Opsi A**.
+
+Ganti `api.domainmu.com` dan `flower.domainmu.com` dengan subdomain kamu di kedua opsi.
+
+---
+
+### Opsi A: Cloudflare Proxy — HTTP ke VPS (Direkomendasikan)
+
+> Cloudflare yang handle SSL. Nginx di VPS cukup HTTP port 80. Tidak perlu certbot sama sekali.
 
 ```nginx
 events {
@@ -341,13 +349,99 @@ http {
     server_tokens off;
     client_max_body_size 10M;
 
-    upstream fastapi_backend {
-        server fastapi:8000;
+    # IP ranges Cloudflare — agar log mencatat IP asli visitor, bukan IP Cloudflare
+    set_real_ip_from 103.21.244.0/22;
+    set_real_ip_from 103.22.200.0/22;
+    set_real_ip_from 103.31.4.0/22;
+    set_real_ip_from 104.16.0.0/13;
+    set_real_ip_from 104.24.0.0/14;
+    set_real_ip_from 108.162.192.0/18;
+    set_real_ip_from 131.0.72.0/22;
+    set_real_ip_from 141.101.64.0/18;
+    set_real_ip_from 162.158.0.0/15;
+    set_real_ip_from 172.64.0.0/13;
+    set_real_ip_from 173.245.48.0/20;
+    set_real_ip_from 188.114.96.0/20;
+    set_real_ip_from 190.93.240.0/20;
+    set_real_ip_from 197.234.240.0/22;
+    set_real_ip_from 198.41.128.0/17;
+    real_ip_header CF-Connecting-IP;
+
+    upstream fastapi_backend { server fastapi:8000; }
+    upstream flower_monitor  { server flower:5555;  }
+
+    # API Backend
+    server {
+        listen 80;
+        server_name api.domainmu.com;
+
+        location /plugin/v1/ {
+            limit_req zone=plugin burst=20 nodelay;
+            proxy_pass http://fastapi_backend;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+            proxy_read_timeout 60s;
+        }
+
+        location /api/ {
+            limit_req zone=api burst=10 nodelay;
+            proxy_pass http://fastapi_backend;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+            proxy_read_timeout 120s;
+        }
+
+        location /health {
+            proxy_pass http://fastapi_backend;
+            proxy_set_header Host $host;
+        }
+
+        location ~ ^/(docs|redoc|openapi.json) {
+            proxy_pass http://fastapi_backend;
+            proxy_set_header Host $host;
+        }
     }
 
-    upstream flower_monitor {
-        server flower:5555;
+    # Flower Monitoring
+    server {
+        listen 80;
+        server_name flower.domainmu.com;
+
+        location / {
+            proxy_pass http://flower_monitor;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+        }
     }
+}
+```
+
+> **Catatan `X-Forwarded-Proto`:** Cloudflare menambahkan header `X-Forwarded-Proto: https` ke setiap request. Header ini diteruskan ke FastAPI sehingga aplikasi tahu koneksi original HTTPS, meskipun VPS hanya menerima HTTP.
+
+---
+
+### Opsi B: Direct HTTPS ke VPS (Tanpa Cloudflare Proxy)
+
+> Digunakan jika DNS di-set "DNS only" (abu-abu) atau tidak memakai Cloudflare proxy. Butuh sertifikat SSL di VPS — lihat Bagian 10.
+
+```nginx
+events {
+    worker_connections 1024;
+}
+
+http {
+    limit_req_zone $binary_remote_addr zone=api:10m rate=30r/m;
+    limit_req_zone $binary_remote_addr zone=plugin:10m rate=60r/m;
+
+    server_tokens off;
+    client_max_body_size 10M;
+
+    upstream fastapi_backend { server fastapi:8000; }
+    upstream flower_monitor  { server flower:5555;  }
 
     # HTTP → HTTPS redirect
     server {
@@ -374,14 +468,11 @@ http {
         ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
         ssl_prefer_server_ciphers off;
         ssl_session_cache shared:SSL:10m;
-        ssl_session_timeout 1d;
 
         add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
         add_header X-Frame-Options DENY always;
         add_header X-Content-Type-Options nosniff always;
-        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 
-        # Plugin callback — rate limit lebih longgar
         location /plugin/v1/ {
             limit_req zone=plugin burst=20 nodelay;
             proxy_pass http://fastapi_backend;
@@ -392,7 +483,6 @@ http {
             proxy_read_timeout 60s;
         }
 
-        # API endpoint
         location /api/ {
             limit_req zone=api burst=10 nodelay;
             proxy_pass http://fastapi_backend;
@@ -403,7 +493,6 @@ http {
             proxy_read_timeout 120s;
         }
 
-        # Health check (tanpa rate limit)
         location /health {
             proxy_pass http://fastapi_backend;
             proxy_set_header Host $host;
@@ -518,64 +607,166 @@ docker compose exec fastapi python scripts/seed.py
 
 ## 9. Integrasi Domain Cloudflare
 
-### 9.1 Tambahkan DNS Records
+### 9.1 Gambaran Umum Arsitektur
 
-Di Cloudflare Dashboard → pilih domain → **DNS** → **Add record**:
+Dengan Cloudflare proxy aktif, traffic mengalir seperti ini:
 
-| Type | Name | Content | Proxy Status |
-|------|------|---------|--------------|
-| A | `api` | `<IP_VPS>` | **DNS only** (abu-abu) |
-| A | `flower` | `<IP_VPS>` | **DNS only** (abu-abu) |
-
-> Biarkan **DNS only** selama setup SSL. Setelah SSL terpasang dan berjalan normal, baru aktifkan proxy (orange cloud).
-
-### 9.2 Verifikasi DNS Propagasi
-
-```bash
-# Tunggu 1-5 menit setelah set record, lalu cek
-nslookup api.domainmu.com
-# Output harus menunjukkan IP VPS kamu
+```
+Visitor ──HTTPS──► Cloudflare Edge ──HTTP──► VPS Nginx (port 80) ──► FastAPI/Flower
 ```
 
-### 9.3 Aktifkan Cloudflare Proxy (Setelah SSL Selesai)
+Cloudflare bertindak sebagai SSL terminator sekaligus CDN + WAF. VPS tidak perlu sertifikat SSL sama sekali jika menggunakan mode Flexible.
 
-Setelah SSL terpasang dan `curl https://api.domainmu.com/health` berhasil:
+### 9.2 Setup DNS Records
 
-1. Cloudflare Dashboard → **DNS** → ubah `api` dan `flower` ke **Proxied** (orange cloud)
-2. Cloudflare Dashboard → **SSL/TLS** → Overview → pilih **Full (Strict)**
+Di Cloudflare Dashboard → pilih domain → **DNS** → **Add record**.
 
-**Pengaturan Cloudflare yang direkomendasikan:**
+Tambahkan record berikut (ganti `<IP_VPS>` dengan IP VPS kamu):
 
-| Kategori | Setting | Nilai |
-|----------|---------|-------|
-| SSL/TLS | Encryption mode | Full (Strict) |
-| SSL/TLS | Always Use HTTPS | On |
-| Security | Bot Fight Mode | On |
-| Security | Browser Integrity Check | On |
-| Speed | Auto Minify | Off |
-| Speed | Brotli | On |
+| Type | Name | Content | Proxy Status | Keterangan |
+|------|------|---------|--------------|------------|
+| A | `api` | `<IP_VPS>` | **Proxied** (orange) | Endpoint API backend |
+| A | `flower` | `<IP_VPS>` | **Proxied** (orange) | Celery task monitor |
 
-### 9.4 Page Rule untuk Plugin Callback
+> **Langsung Proxied** — berbeda dengan panduan lama yang menyuruh DNS only dulu. Karena kita tidak pakai certbot, DNS langsung di-proxy dari awal tidak masalah.
 
-Agar callback dari plugin OJS tidak di-cache Cloudflare:
+**Verifikasi propagasi DNS:**
 
-Cloudflare → **Rules** → **Page Rules** → **Create Page Rule**:
-- URL: `api.domainmu.com/plugin/v1/*`
-- Setting: **Cache Level** → **Bypass**
+```bash
+# Tunggu 1-5 menit, lalu cek
+# Output akan menunjukkan IP Cloudflare (bukan IP VPS kamu) — ini normal
+nslookup api.domainmu.com
+
+# Atau cek via curl, pastikan merespons (meski belum ada konten)
+curl -I http://api.domainmu.com/health
+```
+
+### 9.3 Pilih Mode SSL Cloudflare
+
+Cloudflare Dashboard → **SSL/TLS** → **Overview**:
+
+| Mode | Alur | Perlu SSL di VPS? | Rekomendasi |
+|------|------|-------------------|-------------|
+| **Flexible** | Browser→CF: HTTPS, CF→VPS: HTTP | Tidak | Paling mudah |
+| **Full** | Browser→CF: HTTPS, CF→VPS: HTTPS | Ya (boleh self-signed) | - |
+| **Full (Strict)** | Browser→CF: HTTPS, CF→VPS: HTTPS | Ya (cert valid) | Jika butuh E2E encryption |
+
+**Untuk setup ini, pilih: Flexible**
+
+> Dengan Flexible, Cloudflare connect ke VPS via HTTP port 80 — persis yang kita setup di Nginx Opsi A. Visitor tetap lihat HTTPS di browser.
+
+### 9.4 Pengaturan SSL/TLS Tambahan
+
+Masih di menu **SSL/TLS**:
+
+| Tab | Setting | Nilai |
+|-----|---------|-------|
+| Overview | SSL/TLS encryption mode | **Flexible** |
+| Edge Certificates | Always Use HTTPS | **On** |
+| Edge Certificates | Minimum TLS Version | **TLS 1.2** |
+| Edge Certificates | Opportunistic Encryption | **On** |
+
+### 9.5 Setup Subdomain `flower.domainmu.com`
+
+Flower (Celery monitor) sudah otomatis dapat HTTPS dari Cloudflare karena DNS record-nya juga Proxied. Namun Flower perlu proteksi akses karena menampilkan task queue secara lengkap.
+
+**Proteksi Flower via Cloudflare Access (gratis untuk 1 aplikasi):**
+
+1. Cloudflare Dashboard → **Zero Trust** → **Access** → **Applications** → **Add an application**
+2. Pilih: **Self-hosted**
+3. Application name: `Flower Monitor`
+4. Application domain: `flower.domainmu.com`
+5. Policy: tambahkan email yang boleh akses (email akun Cloudflare kamu)
+6. Save
+
+Dengan ini, siapapun yang buka `flower.domainmu.com` harus login via Cloudflare Access (one-time email OTP) sebelum bisa lihat Flower.
+
+> Alternatif lebih simpel: biarkan Flower basic auth dari `.env` (`FLOWER_BASIC_AUTH`) yang sudah dikonfigurasi di `docker-compose.yml`. Cloudflare tidak memblokir basic auth.
+
+### 9.6 Cache Rules untuk Plugin Callback
+
+Pastikan endpoint plugin callback tidak di-cache Cloudflare.
+
+Cloudflare Dashboard → **Caching** → **Cache Rules** → **Create rule**:
+
+- Rule name: `Bypass cache for plugin callback`
+- When: `Hostname equals api.domainmu.com AND URI Path starts with /plugin/v1`
+- Then: **Bypass cache**
+
+### 9.7 Pengaturan Security Cloudflare
+
+Cloudflare Dashboard → **Security**:
+
+| Setting | Nilai | Alasan |
+|---------|-------|--------|
+| Security Level | Medium | Block bot + suspicious traffic |
+| Bot Fight Mode | On | Cegah scraping |
+| Browser Integrity Check | On | Verifikasi browser legit |
+
+Cloudflare Dashboard → **Speed** → **Optimization**:
+
+| Setting | Nilai |
+|---------|-------|
+| Auto Minify | Off (semua) | API response bukan HTML statis |
+| Brotli | On |
+
+### 9.8 Firewall Rule Opsional — Blokir Akses Langsung ke VPS
+
+Dengan Cloudflare proxy aktif, idealnya VPS hanya menerima traffic dari IP Cloudflare (bukan dari IP lain langsung). Ini mencegah bypass Cloudflare.
+
+```bash
+# Izinkan hanya IP Cloudflare di port 80
+# (jalankan di VPS setelah UFW aktif)
+
+for ip in \
+  103.21.244.0/22 \
+  103.22.200.0/22 \
+  103.31.4.0/22 \
+  104.16.0.0/13 \
+  104.24.0.0/14 \
+  108.162.192.0/18 \
+  131.0.72.0/22 \
+  141.101.64.0/18 \
+  162.158.0.0/15 \
+  172.64.0.0/13 \
+  173.245.48.0/20 \
+  188.114.96.0/20 \
+  190.93.240.0/20 \
+  197.234.240.0/22 \
+  198.41.128.0/17; do
+    sudo ufw allow from $ip to any port 80
+done
+
+# Blokir port 80 dari semua IP lain
+sudo ufw delete allow 80/tcp
+sudo ufw deny 80/tcp
+
+# Cek status
+sudo ufw status numbered
+```
+
+> **Opsional** — untuk capstone, cukup biarkan port 80 terbuka untuk semua. Rule ini berguna untuk production serius.
 
 ---
 
-## 10. SSL dengan Let's Encrypt
+## 10. SSL Manual — Tanpa Cloudflare Proxy (Opsional)
 
-> Lakukan setelah DNS record propagasi dan menunjuk ke IP VPS.
+> **Skip bagian ini jika menggunakan Cloudflare proxy (Opsi A di Bagian 6).** Cloudflare sudah handle SSL secara otomatis.
+>
+> Bagian ini hanya relevan jika menggunakan Nginx **Opsi B** (direct HTTPS ke VPS tanpa Cloudflare proxy), atau jika Cloudflare proxy tidak bisa digunakan.
 
-### 10.1 Hentikan Nginx Sementara
+### 10.1 Persyaratan
+
+- DNS record sudah di-set ke **DNS only** (abu-abu, bukan orange) di Cloudflare
+- DNS sudah propagasi dan menunjuk ke IP VPS (`nslookup api.domainmu.com` mengembalikan IP VPS)
+
+### 10.2 Hentikan Nginx Sementara
 
 ```bash
 docker compose stop nginx
 ```
 
-### 10.2 Dapatkan Sertifikat
+### 10.3 Dapatkan Sertifikat Let's Encrypt
 
 ```bash
 sudo certbot certonly --standalone \
@@ -589,20 +780,39 @@ sudo certbot certonly --standalone \
 sudo ls /etc/letsencrypt/live/
 ```
 
-### 10.3 Jalankan Ulang Nginx
+### 10.4 Mount Sertifikat ke Nginx Container
+
+Update service `nginx` di `docker-compose.yml`:
+
+```yaml
+nginx:
+  image: nginx:1.25-alpine
+  ports:
+    - "80:80"
+    - "443:443"
+  volumes:
+    - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    - /etc/letsencrypt:/etc/letsencrypt:ro
+    - /var/www/certbot:/var/www/certbot:ro
+  depends_on:
+    - fastapi
+    - flower
+```
+
+### 10.5 Jalankan Ulang Nginx
 
 ```bash
 docker compose up -d nginx
 ```
 
-### 10.4 Verifikasi HTTPS
+### 10.6 Verifikasi HTTPS
 
 ```bash
 curl https://api.domainmu.com/health
 # Expected: {"status":"ok"}
 ```
 
-### 10.5 Auto-Renewal SSL
+### 10.7 Auto-Renewal SSL
 
 ```bash
 # Test renewal (dry run)
@@ -926,12 +1136,12 @@ Sebelum declare production-ready, pastikan semua item ini terpenuhi:
 - [ ] `alembic upgrade head` berhasil, semua tabel terbuat
 - [ ] `scripts/seed.py` berhasil, admin user bisa login
 - [ ] `curl https://api.domainmu.com/health` mengembalikan `{"status":"ok"}`
-- [ ] SSL grade A di [ssllabs.com](https://www.ssllabs.com/ssltest/)
-- [ ] Cloudflare DNS record sudah menunjuk ke IP VPS dengan benar
-- [ ] Cloudflare SSL mode: **Full (Strict)**
+- [ ] Cloudflare DNS record `api` dan `flower` berstatus **Proxied** (orange cloud)
+- [ ] Cloudflare SSL/TLS mode: **Flexible** (atau Full jika pakai cert di VPS)
+- [ ] Cloudflare **Always Use HTTPS**: On
+- [ ] Cache Rule bypass untuk `/plugin/v1/*` sudah dibuat
 - [ ] Firewall UFW hanya membuka port 22, 80, 443
 - [ ] Cron job backup database aktif (`sudo crontab -l`)
-- [ ] Cron job certbot renew aktif
 - [ ] Flower dashboard accessible di `https://flower.domainmu.com`
 - [ ] Test scan end-to-end berhasil (job sampai status "completed")
 - [ ] Email notifikasi berfungsi
