@@ -11,6 +11,13 @@ celery_app.conf.update(
     timezone="Asia/Jakarta",
     enable_utc=True,
     task_always_eager=False,
+    broker_connection_retry_on_startup=True,
+    include=[
+        "app.workers.internal_bot",
+        "app.workers.external_bot",
+        "app.workers.scoring",
+        "app.workers.notify",
+    ],
     task_routes={
         "app.workers.internal_bot.*": {"queue": "internal_scan"},
         "app.workers.external_bot.*": {"queue": "external_scan"},
