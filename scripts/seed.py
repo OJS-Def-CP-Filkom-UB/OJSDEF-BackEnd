@@ -1,4 +1,8 @@
 """Idempotent seed: default tenant + saas_admin user."""
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import asyncio
 import uuid
 from passlib.context import CryptContext
