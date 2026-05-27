@@ -20,8 +20,8 @@ RLS_TABLES = [
 _TS = dict(type_=sa.DateTime(timezone=True), server_default=sa.func.now())
 
 
-def _uuid_col(name="id", **kw):
-    return sa.Column(name, UUID(as_uuid=True), **kw)
+def _uuid_col(name="id", *args, **kw):
+    return sa.Column(name, UUID(as_uuid=True), *args, **kw)
 
 
 def upgrade() -> None:
