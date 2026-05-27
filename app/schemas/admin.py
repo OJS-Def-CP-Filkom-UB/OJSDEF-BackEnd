@@ -1,4 +1,5 @@
 from pydantic import BaseModel, EmailStr
+from app.schemas.auth import UserResponse
 
 
 class CreateUserRequest(BaseModel):
@@ -6,6 +7,11 @@ class CreateUserRequest(BaseModel):
     full_name: str
     role: str
     tenant_id: str | None = None
+
+
+class CreateUserResponse(UserResponse):
+    """Response for POST /admin/users — includes temp_password (shown once only)."""
+    temp_password: str
 
 
 class PatchUserRequest(BaseModel):

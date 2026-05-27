@@ -674,11 +674,12 @@ Buat user baru (biasanya `admin_ojs` atau `viewer` untuk tenant tertentu).
   "must_change_password": true,
   "notif_email": true,
   "notif_telegram": false,
-  "telegram_chat_id": null
+  "telegram_chat_id": null,
+  "temp_password": "aB3xQr9mNkLp"
 }
 ```
 
-> Password sementara digenerate otomatis (12 karakter). Frontend perlu menampilkan info bahwa user harus ganti password saat pertama login.
+> **`temp_password`** ditampilkan **sekali saja** di response ini — backend tidak menyimpannya dalam bentuk plaintext (hanya bcrypt hash). Frontend **wajib** menampilkan nilai ini kepada `saas_admin` yang sedang login agar dapat diteruskan kepada pengguna baru. Pengguna baru wajib ganti password saat pertama kali login (`must_change_password: true`).
 
 ---
 
@@ -990,6 +991,11 @@ export interface CreateUserRequest {
   full_name: string
   role: UserRole
   tenant_id?: string
+}
+
+/** temp_password hanya ada di response POST /admin/users — ditampilkan sekali lalu tidak bisa diambil lagi */
+export interface CreateUserResponse extends UserProfile {
+  temp_password: string
 }
 
 export interface UpdateUserRequest {

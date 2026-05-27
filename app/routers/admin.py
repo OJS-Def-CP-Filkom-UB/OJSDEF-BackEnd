@@ -6,17 +6,16 @@ from sqlalchemy import select
 from app.database import get_db
 from app.models import User, Tenant
 from app.schemas.admin import (
-    CreateUserRequest, PatchUserRequest,
+    CreateUserRequest, CreateUserResponse, PatchUserRequest,
     CreateTenantRequest, TenantResponse,
 )
-from app.schemas.auth import UserResponse
 from app.services.auth import require_role, hash_password
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 _saas = Depends(require_role("saas_admin"))
 
 
-@router.post("/users", response_model=UserResponse, status_code=201, dependencies=[_saas])
+@router.post("/users", response_model=CreateUserResponse, status_code=201, dependencies=[_saas])
 async def create_user(body: CreateUserRequest, db: AsyncSession = Depends(get_db)):
     temp_password = secrets.token_urlsafe(12)
     tid = uuid.UUID(body.tenant_id) if body.tenant_id else None
@@ -33,11 +32,14 @@ async def create_user(body: CreateUserRequest, db: AsyncSession = Depends(get_db
     db.add(user)
     await db.commit()
     await db.refresh(user)
-    return UserResponse(
+    # temp_password is returned in plaintext exactly ONCE here.
+    # It is never stored in plaintext — only as a bcrypt hash in hashed_password.
+    return CreateUserResponse(
         id=str(user.id), email=user.email, full_name=user.full_name,
         role=user.role, must_change_password=user.must_change_password,
         notif_email=user.notif_email, notif_telegram=user.notif_telegram,
         telegram_chat_id=user.telegram_chat_id,
+        temp_password=temp_password,
     )
 
 
