@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Boolean, Text, ForeignKey
+from sqlalchemy import DateTime, String, Boolean, Text, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from app.models.base import Base, TimestampMixin
@@ -16,5 +16,5 @@ class OJSTarget(Base, TimestampMixin):
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     verification_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
     plugin_api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
-    plugin_last_seen: Mapped[datetime | None] = mapped_column(nullable=True)
+    plugin_last_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     ojs_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
