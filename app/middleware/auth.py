@@ -2,7 +2,6 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from jose import JWTError
 from app.services.auth import decode_access_token
-from app.database import set_tenant_context, AsyncSessionLocal
 
 WHITELIST = {
     "/api/v1/auth/login", "/api/v1/auth/refresh",
@@ -25,12 +24,10 @@ async def jwt_middleware(request: Request, call_next):
     except JWTError:
         return JSONResponse({"detail": "Invalid token"}, status_code=401)
 
+    # Populate request.state so that get_db() can set RLS tenant context
+    # on the session it creates for each route handler.
     request.state.user_id = payload["sub"]
     request.state.tenant_id = payload["tenant_id"]
     request.state.role = payload["role"]
 
-    async with AsyncSessionLocal() as session:
-        await set_tenant_context(session, payload["tenant_id"])
-        request.state.db_session = session
-        response = await call_next(request)
-    return response
+    return await call_next(request)
