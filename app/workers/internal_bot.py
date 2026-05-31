@@ -1,24 +1,104 @@
 import asyncio
-import uuid
+import hmac
+import hashlib
 import json
+import time
+import uuid
 from datetime import datetime, timezone
+
+import httpx
 from sqlalchemy import select
+
 from app.celery_app import celery_app
 from app.database import AsyncSessionLocal
-from app.models import ScanJob, ScanFinding
+from app.models import OJSTarget, ScanJob, ScanFinding
 from app.scanners.internal.config_scanner import scan_config
 from app.scanners.internal.plugin_auditor import scan_plugins
 from app.scanners.internal.rbac_auditor import scan_rbac
 from app.scanners.internal.file_integrity import scan_file_integrity
 from app.scanners.internal.content_detector import scan_content
 from app.scanners.internal.db_security import scan_db_security
+from app.services.crypto import decrypt_api_key
 import redis.asyncio as aioredis
 from app.config import get_settings
 
 settings = get_settings()
 
+DEFAULT_MODULES = ["fingerprint", "config", "plugins", "rbac", "file_integrity", "content"]
 
-async def _run_internal_scan(job_id: str, data: dict):
+
+def _sign_for_plugin(api_key: str, body: bytes) -> dict:
+    """Mirrors PHP HmacSigner.sign(): timestamp + '.' + body."""
+    ts = int(time.time())
+    message = str(ts).encode() + b"." + body
+    sig = "sha256=" + hmac.new(api_key.encode(), message, hashlib.sha256).hexdigest()
+    return {
+        "Content-Type": "application/json",
+        "X-OJSDef-Signature": sig,
+        "X-OJSDef-Timestamp": str(ts),
+    }
+
+
+async def _trigger_plugin_direct(trigger_endpoint: str, api_key: str, job_id: str) -> bool:
+    """POST to plugin's /trigger endpoint (Direct Mode). Returns True on HTTP 202."""
+    body = json.dumps({"job_id": job_id, "scan_modules": DEFAULT_MODULES}).encode()
+    headers = _sign_for_plugin(api_key, body)
+    try:
+        async with httpx.AsyncClient(timeout=15.0, verify=True) as client:
+            resp = await client.post(trigger_endpoint, content=body, headers=headers)
+        return resp.status_code == 202
+    except Exception:
+        return False
+
+
+async def _setup_internal_scan(job_id: str, target_id: str) -> None:
+    """Set job to 'running' and trigger the plugin via Direct or Heartbeat mode."""
+    async with AsyncSessionLocal() as session:
+        target = (await session.execute(
+            select(OJSTarget).where(OJSTarget.id == target_id)
+        )).scalar_one_or_none()
+        if not target:
+            return
+
+        job = (await session.execute(
+            select(ScanJob).where(ScanJob.id == job_id)
+        )).scalar_one_or_none()
+        if not job:
+            return
+
+        job.status = "running"
+        await session.commit()
+
+        api_key = (
+            decrypt_api_key(target.plugin_api_key_encrypted)
+            if target.plugin_api_key_encrypted
+            else None
+        )
+        connection_mode = target.connection_mode or "unknown"
+        trigger_ep = target.trigger_endpoint
+
+    # Direct Mode: POST to plugin's trigger endpoint
+    if connection_mode == "direct" and trigger_ep and api_key:
+        success = await _trigger_plugin_direct(trigger_ep, api_key, job_id)
+        if success:
+            return
+        # Direct Mode failed — fall through to heartbeat mode
+
+    # Heartbeat Mode (or fallback): store pending job; plugin picks up on next heartbeat
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(OJSTarget).where(OJSTarget.id == target_id)
+        )
+        t = result.scalar_one_or_none()
+        if t:
+            t.pending_scan_job_id = uuid.UUID(job_id)
+            if connection_mode == "direct":
+                t.connection_mode = "heartbeat"
+            await session.commit()
+
+
+async def _run_internal_scan(job_id: str, data: dict) -> None:
+    """Process plugin-provided scan data and persist findings."""
     all_findings = (
         scan_config(data.get("config", {}))
         + scan_plugins(data.get("plugins", []))
@@ -39,6 +119,7 @@ async def _run_internal_scan(job_id: str, data: dict):
                 cve_id=f.cve_id, owasp_category=f.owasp_category,
             ))
         await session.commit()
+
     r = aioredis.from_url(settings.redis_url, decode_responses=True)
     raw = await r.get(f"scan_progress:{job_id}")
     progress = json.loads(raw) if raw else {}
@@ -47,10 +128,16 @@ async def _run_internal_scan(job_id: str, data: dict):
     await r.aclose()
 
 
-@celery_app.task(name="app.workers.internal_bot.internal_scan_task",
-                 bind=True, max_retries=3, autoretry_for=(Exception,), default_retry_delay=60)
+@celery_app.task(
+    name="app.workers.internal_bot.internal_scan_task",
+    bind=True, max_retries=3, autoretry_for=(Exception,), default_retry_delay=60,
+)
 def internal_scan_task(self, job_id: str, target_id: str):
-    asyncio.run(_run_internal_scan(job_id, {}))
+    """Trigger the OJSDef plugin to run an internal scan.
+    Direct Mode: POST to plugin's /trigger endpoint immediately.
+    Heartbeat Mode: store pending job; plugin picks up on next heartbeat (~5 min).
+    """
+    asyncio.run(_setup_internal_scan(job_id, target_id))
 
 
 @celery_app.task(
@@ -59,4 +146,5 @@ def internal_scan_task(self, job_id: str, target_id: str):
     autoretry_for=(Exception,), default_retry_delay=60,
 )
 def process_plugin_data_task(self, job_id: str, data: dict):
+    """Process scan data received from plugin callback and persist findings."""
     asyncio.run(_run_internal_scan(job_id, data))

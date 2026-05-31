@@ -38,7 +38,9 @@ async def plugin_auth_middleware(request: Request, call_next):
     api_key = decrypt_api_key(target.plugin_api_key_encrypted).encode()
 
     # 3. Compute + constant-time compare
-    expected = "sha256=" + hmac.new(api_key, body, hashlib.sha256).hexdigest()
+    # PHP HmacSigner signs: timestamp + '.' + body — same format must be used here
+    message = timestamp_str.encode() + b"." + body
+    expected = "sha256=" + hmac.new(api_key, message, hashlib.sha256).hexdigest()
     if not hmac.compare_digest(signature, expected):
         return JSONResponse({"detail": "Unauthorized"}, status_code=401)
 
