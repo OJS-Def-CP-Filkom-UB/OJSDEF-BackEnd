@@ -8,6 +8,7 @@ from app.database import get_db
 from app.models import Report, ScanFinding, ScanJob
 from app.schemas.reports import ReportResponse
 from app.services.auth import get_current_user
+from app.core.audit import create_audit_log
 from app.config import get_settings
 
 router = APIRouter(prefix="/api/v1/reports", tags=["reports"])
@@ -51,6 +52,11 @@ async def download_pdf(
         Params={"Bucket": settings.minio_bucket, "Key": report.storage_path},
         ExpiresIn=3600,
     )
+    await create_audit_log(
+        db, user_id=current.get("sub"), user_email=current.get("email", "unknown"),
+        tenant_id=current.get("tenant_id"), action="report.exported",
+        resource_type="report", resource_id=str(report_id), details={"format": "pdf"},
+    )
     return RedirectResponse(url)
 
 
@@ -70,12 +76,25 @@ async def download_json(
         select(ScanFinding).where(ScanFinding.job_id == report.job_id)
     )
     findings = findings_result.scalars().all()
+    await create_audit_log(
+        db, user_id=current.get("sub"), user_email=current.get("email", "unknown"),
+        tenant_id=current.get("tenant_id"), action="report.exported",
+        resource_type="report", resource_id=str(report_id), details={"format": "json"},
+    )
     return {
-        "job_id": str(job.id), "scan_type": job.scan_type, "status": job.status,
-        "overall_score": job.overall_score, "risk_level": job.risk_level,
+        "job_id": str(job.id), "scan_type": job.scan_type,
+        "status": job.status, "overall_score": job.overall_score, "risk_level": job.risk_level,
+        "findings_summary": {
+            "total": len(findings),
+            "false_positives": sum(1 for f in findings if f.is_false_positive),
+        },
         "findings": [
-            {"title": f.title, "severity": f.severity, "cvss_score": f.cvss_score,
-             "description": f.description, "remediation": f.remediation}
+            {
+                "title": f.title, "severity": f.severity, "cvss_score": f.cvss_score,
+                "description": f.description, "remediation": f.remediation,
+                "is_false_positive": f.is_false_positive,
+                "false_positive_label": "False Positive" if f.is_false_positive else None,
+            }
             for f in findings
         ],
     }
