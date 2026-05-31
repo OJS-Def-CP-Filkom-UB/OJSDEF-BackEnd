@@ -1,3 +1,4 @@
+from typing import Literal
 from pydantic import BaseModel
 from datetime import datetime
 
@@ -5,6 +6,13 @@ from datetime import datetime
 class StartScanRequest(BaseModel):
     target_id: str
     scan_type: str  # internal|external|full
+
+
+class ScanProgress(BaseModel):
+    stage: Literal["external_scan", "internal_audit", "scoring", "report_gen"]
+    current_step: int
+    total_steps: int
+    message: str  # Bahasa Indonesia, contoh: "Memeriksa header HTTP..."
 
 
 class ScanResponse(BaseModel):
@@ -18,7 +26,7 @@ class ScanResponse(BaseModel):
     high_count: int
     medium_count: int
     low_count: int
-    progress: dict | None = None
+    progress: ScanProgress | None = None
     created_at: datetime
 
 

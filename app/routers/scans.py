@@ -8,7 +8,7 @@ import redis.asyncio as aioredis
 from celery import chain, chord
 from app.database import get_db
 from app.models import OJSTarget, ScanJob, ScanFinding
-from app.schemas.scans import StartScanRequest, ScanResponse, FindingResponse
+from app.schemas.scans import StartScanRequest, ScanResponse, FindingResponse, ScanProgress
 from app.services.auth import get_current_user, require_role
 from app.core.audit import create_audit_log
 from app.celery_app import celery_app
@@ -30,13 +30,19 @@ async def _get_progress(job_id: str) -> dict | None:
 
 
 def _to_response(job: ScanJob, progress: dict | None = None) -> ScanResponse:
+    parsed_progress: ScanProgress | None = None
+    if progress:
+        try:
+            parsed_progress = ScanProgress(**progress)
+        except Exception:
+            parsed_progress = None  # tolak progress yang malformed
     return ScanResponse(
         id=str(job.id), target_id=str(job.target_id),
         scan_type=job.scan_type, status=job.status,
         overall_score=job.overall_score, risk_level=job.risk_level,
         critical_count=job.critical_count, high_count=job.high_count,
         medium_count=job.medium_count, low_count=job.low_count,
-        progress=progress, created_at=job.created_at,
+        progress=parsed_progress, created_at=job.created_at,
     )
 
 
@@ -164,7 +170,7 @@ async def get_findings(
 async def mark_false_positive(
     job_id: uuid.UUID,
     finding_id: uuid.UUID,
-    current: dict = Depends(get_current_user),
+    current: dict = Depends(require_role("admin_ojs", "saas_admin")),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
