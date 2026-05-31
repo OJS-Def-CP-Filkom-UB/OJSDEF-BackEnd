@@ -1,4 +1,5 @@
 from celery import Celery
+from celery.schedules import crontab
 from app.config import get_settings
 
 settings = get_settings()
@@ -17,6 +18,7 @@ celery_app.conf.update(
         "app.workers.external_bot",
         "app.workers.scoring",
         "app.workers.notify",
+        "app.workers.tasks",
     ],
     task_routes={
         "app.workers.internal_bot.*": {"queue": "internal_scan"},
@@ -25,3 +27,11 @@ celery_app.conf.update(
         "app.workers.notify.*":       {"queue": "notifications"},
     },
 )
+
+celery_app.conf.beat_schedule = {
+    **getattr(celery_app.conf, 'beat_schedule', {}),
+    'cleanup-stale-pending-jobs': {
+        'task': 'app.workers.tasks.cleanup_stale_pending_jobs',
+        'schedule': crontab(minute='*/5'),
+    },
+}
