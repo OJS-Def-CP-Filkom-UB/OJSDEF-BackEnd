@@ -35,7 +35,6 @@ async def login(
             tenant_id=None,
             action="user.login_failed",
             resource_type="auth",
-            details={"attempted_email": body.email},
         )
         raise HTTPException(status_code=401, detail="Credensial tidak valid")
     if not user.is_active:

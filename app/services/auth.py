@@ -39,6 +39,7 @@ def _make_token(payload: dict, expire_delta: timedelta) -> tuple[str, str]:
 async def create_tokens(user: User) -> dict:
     payload = {
         "sub": str(user.id),
+        "email": user.email,
         "tenant_id": str(user.tenant_id),
         "role": user.role,
     }
