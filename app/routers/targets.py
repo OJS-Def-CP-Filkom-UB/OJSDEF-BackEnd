@@ -14,6 +14,7 @@ from app.services.targets import (
 )
 from app.services.crypto import decrypt_api_key
 from app.services.auth import get_current_user
+from app.core.audit import create_audit_log
 
 router = APIRouter(prefix="/api/v1/targets", tags=["targets"])
 
@@ -44,6 +45,12 @@ async def add_target(
     db: AsyncSession = Depends(get_db),
 ):
     target = await create_target(db, uuid.UUID(current["tenant_id"]), body.name, body.url)
+    await create_audit_log(
+        db, user_id=current.get("sub"), user_email=current.get("email", "unknown"),
+        tenant_id=current.get("tenant_id"), action="target.created",
+        resource_type="target", resource_id=str(target.id),
+        details={"name": target.name, "url": target.url},
+    )
     return _to_response(target)
 
 
@@ -88,11 +95,21 @@ async def verify_target(
     if await verify_domain_file(target.url, token):
         target.is_verified = True
         await db.commit()
+        await create_audit_log(
+            db, user_id=current.get("sub"), user_email=current.get("email", "unknown"),
+            tenant_id=current.get("tenant_id"), action="target.verified",
+            resource_type="target", resource_id=str(target_id), details={"method": "file"},
+        )
         return VerifyResponse(verified=True, method="file")
     domain = urlparse(target.url).hostname
     if await verify_domain_dns(domain, token):
         target.is_verified = True
         await db.commit()
+        await create_audit_log(
+            db, user_id=current.get("sub"), user_email=current.get("email", "unknown"),
+            tenant_id=current.get("tenant_id"), action="target.verified",
+            resource_type="target", resource_id=str(target_id), details={"method": "dns"},
+        )
         return VerifyResponse(verified=True, method="dns")
     return VerifyResponse(verified=False)
 

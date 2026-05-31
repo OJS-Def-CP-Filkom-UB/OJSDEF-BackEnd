@@ -10,6 +10,7 @@ from app.database import get_db
 from app.models import OJSTarget, ScanJob, ScanFinding
 from app.schemas.scans import StartScanRequest, ScanResponse, FindingResponse
 from app.services.auth import get_current_user, require_role
+from app.core.audit import create_audit_log
 from app.celery_app import celery_app
 from app.config import get_settings
 
@@ -90,6 +91,12 @@ async def start_scan(
     else:
         chord([internal, external], scoring).delay()
 
+    await create_audit_log(
+        db, user_id=current.get("sub"), user_email=current.get("email", "unknown"),
+        tenant_id=current.get("tenant_id"), action="scan.started",
+        resource_type="scan", resource_id=str(job.id),
+        details={"scan_type": body.scan_type, "target_id": str(body.target_id)},
+    )
     return _to_response(job)
 
 
@@ -169,6 +176,12 @@ async def mark_false_positive(
     f.is_false_positive = not f.is_false_positive
     await db.commit()
     await db.refresh(f)
+    await create_audit_log(
+        db, user_id=current.get("sub"), user_email=current.get("email", "unknown"),
+        tenant_id=current.get("tenant_id"), action="finding.false_positive_toggled",
+        resource_type="scan", resource_id=str(finding_id),
+        details={"is_false_positive": f.is_false_positive, "job_id": str(job_id)},
+    )
     return FindingResponse(
         id=str(f.id), finding_type=f.finding_type, category=f.category,
         title=f.title, description=f.description, affected_path=f.affected_path,

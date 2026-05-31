@@ -11,6 +11,7 @@ from app.schemas.admin import (
     CreateTenantRequest, TenantResponse,
 )
 from app.services.auth import require_role, hash_password
+from app.core.audit import create_audit_log
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 _saas = Depends(require_role("saas_admin"))
@@ -55,6 +56,12 @@ async def create_user(body: CreateUserRequest, db: AsyncSession = Depends(get_db
     db.add(user)
     await db.commit()
     await db.refresh(user)
+    await create_audit_log(
+        db, user_id=None, user_email="saas_admin",
+        tenant_id=str(tid), action="user.created",
+        resource_type="user", resource_id=str(user.id),
+        details={"email": user.email, "role": user.role},
+    )
     return CreateUserResponse(
         id=str(user.id), email=user.email, full_name=user.full_name,
         role=user.role, must_change_password=user.must_change_password,
