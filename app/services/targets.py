@@ -20,7 +20,7 @@ def compute_plugin_status(target: OJSTarget) -> bool:
 
 
 async def verify_domain_file(url: str, token: str) -> bool:
-    verify_url = f"{url.rstrip('/')}/ojsdef-verify-{token}.txt"
+    verify_url = f"{url.rstrip('/')}/.well-known/ojsdef-verify-{token}.txt"
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(verify_url)
@@ -34,7 +34,7 @@ async def verify_domain_dns(domain: str, token: str) -> bool:
         answers = dns.resolver.resolve(domain, "TXT")
         for rdata in answers:
             for txt_string in rdata.strings:
-                if txt_string.decode() == f"ojsdef-verify={token}":
+                if txt_string.decode() == f"ojsdef-verification={token}":
                     return True
     except Exception:
         pass
