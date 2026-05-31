@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from pydantic import BaseModel
@@ -47,7 +47,10 @@ async def list_audit_logs(
     if user_email:
         q = q.where(AuditLog.user_email.ilike(f"%{user_email}%"))
     if tenant_id:
-        q = q.where(AuditLog.tenant_id == uuid.UUID(tenant_id))
+        try:
+            q = q.where(AuditLog.tenant_id == uuid.UUID(tenant_id))
+        except ValueError:
+            raise HTTPException(422, "tenant_id harus berupa UUID valid")
     if date_from:
         q = q.where(AuditLog.created_at >= date_from)
     if date_to:

@@ -25,9 +25,15 @@ def upgrade() -> None:
         existing_type=UUID(as_uuid=True),
         nullable=True,
     )
+    op.create_index("idx_audit_logs_created_at", "audit_logs", ["created_at"])
+    op.create_index("idx_audit_logs_action", "audit_logs", ["action"])
+    op.create_index("idx_audit_logs_tenant_id", "audit_logs", ["tenant_id"])
 
 
 def downgrade() -> None:
+    op.drop_index("idx_audit_logs_tenant_id", table_name="audit_logs")
+    op.drop_index("idx_audit_logs_action", table_name="audit_logs")
+    op.drop_index("idx_audit_logs_created_at", table_name="audit_logs")
     op.alter_column(
         "audit_logs",
         "tenant_id",
