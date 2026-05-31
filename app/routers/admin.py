@@ -1,3 +1,4 @@
+import re
 import uuid
 import secrets
 from fastapi import APIRouter, Depends, HTTPException
@@ -17,12 +18,34 @@ _saas = Depends(require_role("saas_admin"))
 
 @router.post("/users", response_model=CreateUserResponse, status_code=201, dependencies=[_saas])
 async def create_user(body: CreateUserRequest, db: AsyncSession = Depends(get_db)):
-    temp_password = secrets.token_urlsafe(12)
-    tid = uuid.UUID(body.tenant_id) if body.tenant_id else None
-    if not tid:
+    # Resolve tenant_id
+    if body.new_tenant_name:
+        slug = re.sub(r"[^a-z0-9]+", "-", body.new_tenant_name.lower()).strip("-")
+        existing = await db.execute(select(Tenant).where(Tenant.slug == slug))
+        if existing.scalar_one_or_none():
+            slug = f"{slug}-{secrets.token_hex(3)}"
+        new_tenant = Tenant(id=uuid.uuid4(), name=body.new_tenant_name, slug=slug)
+        db.add(new_tenant)
+        await db.flush()
+        tid = new_tenant.id
+    elif body.tenant_id:
+        try:
+            tid = uuid.UUID(body.tenant_id)
+        except ValueError:
+            raise HTTPException(422, "tenant_id harus berupa UUID valid")
+    else:
         result = await db.execute(select(Tenant).where(Tenant.slug == "default"))
         tenant = result.scalar_one_or_none()
-        tid = tenant.id if tenant else None
+        if not tenant:
+            raise HTTPException(400, "tenant_id atau new_tenant_name wajib diisi")
+        tid = tenant.id
+
+    # Check email uniqueness before inserting
+    existing_user = await db.execute(select(User).where(User.email == body.email))
+    if existing_user.scalar_one_or_none():
+        raise HTTPException(409, "Email sudah terdaftar")
+
+    temp_password = secrets.token_urlsafe(12)
     user = User(
         id=uuid.uuid4(), tenant_id=tid,
         email=body.email, full_name=body.full_name, role=body.role,
@@ -32,8 +55,6 @@ async def create_user(body: CreateUserRequest, db: AsyncSession = Depends(get_db
     db.add(user)
     await db.commit()
     await db.refresh(user)
-    # temp_password is returned in plaintext exactly ONCE here.
-    # It is never stored in plaintext — only as a bcrypt hash in hashed_password.
     return CreateUserResponse(
         id=str(user.id), email=user.email, full_name=user.full_name,
         role=user.role, must_change_password=user.must_change_password,
