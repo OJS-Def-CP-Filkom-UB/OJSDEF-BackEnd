@@ -74,6 +74,7 @@ from app.routers import reports as reports_router
 from app.routers import dashboard as dashboard_router
 from app.routers import admin as admin_router
 from app.routers import plugin_callback as plugin_router
+from app.routers.audit_logs import router as audit_logs_router
 
 app.include_router(auth_router.router)
 app.include_router(targets_router.router)
@@ -82,3 +83,4 @@ app.include_router(reports_router.router)
 app.include_router(dashboard_router.router)
 app.include_router(admin_router.router)
 app.include_router(plugin_router.router)
+app.include_router(audit_logs_router)
