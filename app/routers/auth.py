@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from jose import JWTError
@@ -15,19 +15,41 @@ from app.services.auth import (
     hash_password, verify_password, get_current_user, require_role,
 )
 from app.config import get_settings
+from app.core.audit import create_audit_log
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 settings = get_settings()
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
+async def login(
+    body: LoginRequest,
+    db: AsyncSession = Depends(get_db),
+):
     user = await authenticate_user(db, body.email, body.password)
     if not user:
+        await create_audit_log(
+            db,
+            user_id=None,
+            user_email=body.email,
+            tenant_id=None,
+            action="user.login_failed",
+            resource_type="auth",
+            details={"attempted_email": body.email},
+        )
         raise HTTPException(status_code=401, detail="Credensial tidak valid")
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Akun dinonaktifkan")
     tokens = await create_tokens(user)
+    await create_audit_log(
+        db,
+        user_id=str(user.id),
+        user_email=user.email,
+        tenant_id=str(user.tenant_id),
+        action="user.login",
+        resource_type="auth",
+        resource_id=str(user.id),
+    )
     return TokenResponse(**tokens, must_change_password=user.must_change_password)
 
 
@@ -54,14 +76,24 @@ async def refresh(body: RefreshRequest, db: AsyncSession = Depends(get_db)):
 
 @router.post("/logout", status_code=204)
 async def logout(
-    body: RefreshRequest,
+    body: RefreshRequest | None = Body(default=None),
     current: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    try:
-        payload = decode_access_token(body.refresh_token)
-        await revoke_refresh_token(payload["sub"], payload["jti"])
-    except JWTError:
-        pass
+    if body and body.refresh_token:
+        try:
+            payload = decode_access_token(body.refresh_token)
+            await revoke_refresh_token(payload["sub"], payload["jti"])
+        except JWTError:
+            pass
+    await create_audit_log(
+        db,
+        user_id=current.get("sub"),
+        user_email=current.get("email", "unknown"),
+        tenant_id=current.get("tenant_id"),
+        action="user.logout",
+        resource_type="auth",
+    )
 
 
 @router.get("/me", response_model=UserResponse)
@@ -113,3 +145,12 @@ async def change_password(
     user.must_change_password = False
     await db.commit()
     await revoke_all_refresh_tokens(str(user.id))
+    await create_audit_log(
+        db,
+        user_id=str(user.id),
+        user_email=user.email,
+        tenant_id=current.get("tenant_id"),
+        action="user.password_changed",
+        resource_type="auth",
+        resource_id=str(user.id),
+    )
