@@ -44,6 +44,8 @@ app/
 ├── celery_app.py              — Celery instance + config
 ├── config.py                  — Settings via pydantic-settings
 ├── database.py                — SQLAlchemy async engine + session
+├── core/                      — Cross-cutting utilities
+│   └── audit.py               — create_audit_log() helper (savepoint-based, silent fail)
 ├── models/                    — SQLAlchemy ORM models
 │   ├── base.py                — Base + TimestampMixin
 │   ├── user.py
@@ -64,12 +66,14 @@ app/
 │   ├── reports.py
 │   ├── dashboard.py
 │   ├── admin.py
+│   ├── audit_logs.py          — GET /api/v1/audit-logs (saas_admin only)
 │   └── plugin_callback.py     — /plugin/v1/* endpoints (heartbeat, callback, checksums)
 ├── workers/                   — Celery task definitions
 │   ├── internal_bot.py        — Trigger plugin + proses audit data (6 scanner modules)
 │   ├── external_bot.py        — Offensive scanner (8 scanner modules)
 │   ├── scoring.py             — CVSS calc + PDF generation
-│   └── notify.py              — Email + Telegram alerts
+│   ├── notify.py              — Email + Telegram alerts
+│   └── tasks.py               — cleanup_stale_pending_jobs periodic task (setiap 5 menit)
 ├── scanners/
 │   ├── internal/              — Python-side analysis (config, plugins, rbac, file, content, db)
 │   └── external/              — Passive external scan (ssl, headers, cve, vuln_prober, etc.)
@@ -80,7 +84,8 @@ app/
 │   └── plugin_auth.py         — HMAC-SHA256 middleware untuk semua /plugin/v1/* routes
 └── migrations/versions/
     ├── 001_initial.py         — Schema awal
-    └── 002_plugin_connection_fields.py — Tambah trigger/probe/connection_mode/pending_scan ke ojs_targets
+    ├── 002_plugin_connection_fields.py — Tambah trigger/probe/connection_mode/pending_scan ke ojs_targets
+    └── 003_audit_log_user_email_nullable_tenant.py — Tambah user_email, buat tenant_id nullable
 ```
 
 ## Tech Stack
@@ -198,6 +203,7 @@ atau, jika ada pending scan:
 - Semua endpoint kecuali `/health`, `/docs`, dan `/plugin/v1/*` butuh `Authorization: Bearer <JWT>`
 - Plugin endpoints diautentikasi via HMAC-SHA256 (`plugin_auth_middleware`)
 - JWT: access token 1h, refresh token 30d
+- JWT access token payload sekarang include field `email` untuk audit logging
 
 ## Celery Workers
 
@@ -209,6 +215,35 @@ atau, jika ada pending scan:
 | `worker-notify` | `notifications` | 4 | Email + Telegram dispatch |
 
 Scoring worker jalan setelah scan selesai. Temuan Critical otomatis trigger `notifications` queue.
+
+## Deployment Notes (WAJIB baca sebelum deploy)
+
+### Migration setelah update terbaru
+
+```bash
+alembic upgrade head
+```
+
+Migration 003 menambah kolom `user_email` dan membuat `tenant_id` nullable di tabel `audit_logs`.
+
+### Celery Beat
+
+Aktifkan Celery beat scheduler untuk jalankan periodic tasks (cleanup_stale_pending_jobs setiap 5 menit):
+
+```bash
+celery -A app.celery_app beat --loglevel=info
+```
+
+Atau tambahkan ke docker-compose sebagai service terpisah dengan restart policy.
+
+### UserRole Values
+
+Role yang valid dalam JWT token dan RBAC:
+- `admin_ojs` — Pengelola jurnal OJS
+- `saas_admin` — Administrator platform OJSDef
+- `viewer` — Hanya akses baca-saja
+
+Role lama `it_admin` sudah dihapus; gunakan `admin_ojs` untuk IT teams.
 
 ## Environment Variables
 
