@@ -17,6 +17,7 @@ from app.services.targets import (
 from app.services.crypto import decrypt_api_key
 from app.services.auth import get_current_user
 from app.core.audit import create_audit_log
+from app.config import get_settings
 
 
 def _compute_plugin_status_str(t: OJSTarget) -> str:
@@ -176,8 +177,9 @@ async def plugin_guide(
     return PluginGuideResponse(
         target_id=str(target.id),
         api_key=api_key,
+        backend_url=get_settings().app_base_url,
         endpoint="/plugin/v1/callback",
-        instructions="Install plugin OJSDef di OJS, masukkan API Key dan endpoint di atas.",
+        instructions="Masukkan ketiga kredensial di bawah ke form Settings plugin OJSDef di OJS.",
     )
 
 

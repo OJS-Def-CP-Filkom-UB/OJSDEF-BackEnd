@@ -34,6 +34,7 @@ class Settings(BaseSettings):
 
     environment: str = "development"
     allowed_origins: str = "http://localhost:3000"
+    app_base_url: str = "http://localhost:8000"
 
     seed_admin_email: str = "admin@ojsdef.com"
     seed_admin_password: str = ""

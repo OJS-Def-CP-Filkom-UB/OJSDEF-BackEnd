@@ -44,5 +44,6 @@ class VerifyResponse(BaseModel):
 class PluginGuideResponse(BaseModel):
     target_id: str
     api_key: str
+    backend_url: str
     endpoint: str
     instructions: str
