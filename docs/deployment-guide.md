@@ -593,7 +593,7 @@ docker compose logs fastapi --tail=50
 ```bash
 cd /opt/ojsdef/backend
 
-# Jalankan Alembic migration
+# Jalankan semua migration (termasuk 003 untuk audit_logs)
 docker compose exec fastapi alembic upgrade head
 
 # Verifikasi tabel terbuat
@@ -602,6 +602,16 @@ docker compose exec postgres psql -U ojsdef -d ojsdef -c "\dt"
 # Seed data awal (tenant default + saas_admin)
 docker compose exec fastapi python scripts/seed.py
 ```
+
+### Daftar Migration
+
+| Versi | File | Perubahan |
+|-------|------|-----------|
+| 001 | `001_initial.py` | Schema awal semua tabel |
+| 002 | `002_plugin_connection_fields.py` | `trigger_endpoint`, `probe_endpoint`, `connection_mode`, `pending_scan_job_id` di `ojs_targets` |
+| 003 | `003_audit_log_user_email_nullable_tenant.py` | Kolom `user_email` di `audit_logs`; `tenant_id` jadi nullable; index pada `created_at`, `action`, `tenant_id` |
+
+> **Upgrade dari versi sebelumnya:** `alembic upgrade head` aman dijalankan — migration 003 menambah kolom `user_email` (server default `'unknown'`) dan mengubah `tenant_id` nullable tanpa menghapus data existing.
 
 ---
 
@@ -1126,6 +1136,34 @@ docker compose run --rm fastapi python scripts/seed.py
 
 ---
 
+## Catatan Versi Terbaru
+
+### Celery Beat (Periodic Tasks)
+
+Aktifkan Celery beat scheduler agar `cleanup_stale_pending_jobs` berjalan setiap 5 menit (membersihkan scan job yang stuck di status `queued`/`running` lebih dari 30 menit):
+
+```bash
+# Tambahkan service ini ke docker-compose.yml:
+celery-beat:
+  build: .
+  command: celery -A app.celery_app beat --loglevel=info
+  env_file: .env
+  depends_on:
+    - redis
+  restart: unless-stopped
+```
+
+Atau jalankan manual:
+```bash
+docker compose exec fastapi celery -A app.celery_app beat --loglevel=info
+```
+
+### UserRole yang Valid
+
+Role yang dikenali sistem: `admin_ojs` | `saas_admin` | `viewer`. Role `it_admin` sudah dihapus.
+
+---
+
 ## Checklist Deployment
 
 Sebelum declare production-ready, pastikan semua item ini terpenuhi:
@@ -1145,3 +1183,5 @@ Sebelum declare production-ready, pastikan semua item ini terpenuhi:
 - [ ] Flower dashboard accessible di `https://flower.domainmu.com`
 - [ ] Test scan end-to-end berhasil (job sampai status "completed")
 - [ ] Email notifikasi berfungsi
+- [ ] Celery beat service berjalan (`docker compose ps celery-beat`)
+- [ ] `alembic upgrade head` — migration 003 sudah dijalankan (cek kolom `user_email` di tabel `audit_logs`)
