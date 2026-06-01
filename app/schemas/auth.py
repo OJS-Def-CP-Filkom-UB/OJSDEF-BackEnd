@@ -1,4 +1,7 @@
+from typing import Literal
 from pydantic import BaseModel, EmailStr
+
+UserRole = Literal["admin_ojs", "saas_admin", "viewer"]
 
 
 class LoginRequest(BaseModel):
@@ -33,7 +36,7 @@ class UserResponse(BaseModel):
     id: str
     email: str
     full_name: str
-    role: str
+    role: UserRole
     must_change_password: bool
     notif_email: bool
     notif_telegram: bool

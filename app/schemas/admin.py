@@ -1,22 +1,23 @@
 from pydantic import BaseModel, EmailStr
-from app.schemas.auth import UserResponse
+from app.schemas.auth import UserResponse, UserRole
 
 
 class CreateUserRequest(BaseModel):
     email: EmailStr
     full_name: str
-    role: str
+    role: UserRole
     tenant_id: str | None = None
+    new_tenant_name: str | None = None
 
 
 class CreateUserResponse(UserResponse):
-    """Response for POST /admin/users — includes temp_password (shown once only)."""
+    """Response untuk POST /admin/users — temp_password hanya muncul sekali."""
     temp_password: str
 
 
 class PatchUserRequest(BaseModel):
     is_active: bool | None = None
-    role: str | None = None
+    role: UserRole | None = None
 
 
 class CreateTenantRequest(BaseModel):
