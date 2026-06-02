@@ -5,7 +5,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import redis.asyncio as aioredis
-from celery import chain, chord
 from app.database import get_db
 from app.models import OJSTarget, ScanJob, ScanFinding
 from app.schemas.scans import StartScanRequest, ScanResponse, FindingResponse, ScanProgress
@@ -66,7 +65,7 @@ async def start_scan(
         tenant_id=uuid.UUID(current["tenant_id"]),
         target_id=target.id,
         scan_type=body.scan_type,
-        status="queued",
+        status="running",
         started_at=datetime.now(timezone.utc),
     )
     db.add(job)
@@ -77,25 +76,26 @@ async def start_scan(
     target_id = str(target.id)
     target_url = target.url
 
-    internal = celery_app.signature(
-        "app.workers.internal_bot.internal_scan_task",
-        args=[job_id, target_id], immutable=True, queue="internal_scan",
-    )
-    external = celery_app.signature(
-        "app.workers.external_bot.external_scan_task",
-        args=[job_id, target_url], immutable=True, queue="external_scan",
-    )
-    scoring = celery_app.signature(
-        "app.workers.scoring.scoring_task",
-        args=[job_id], immutable=True, queue="scoring",
-    )
+    # Inisialisasi Redis progress sebelum fire tasks
+    r = aioredis.from_url(settings.redis_url, decode_responses=True)
+    await r.setex(f"scan_progress:{job_id}", 3600, json.dumps({
+        "scan_type": body.scan_type,
+        "external_done": False,
+        "internal_done": False,
+    }))
+    await r.aclose()
 
-    if body.scan_type == "internal":
-        chain(internal, scoring).delay()
-    elif body.scan_type == "external":
-        chain(external, scoring).delay()
-    else:
-        chord([internal, external], scoring).delay()
+    # Fire tasks independen — scoring dikoordinasi oleh _try_trigger_scoring via Redis
+    if body.scan_type in ("internal", "full"):
+        celery_app.send_task(
+            "app.workers.internal_bot.internal_scan_task",
+            args=[job_id, target_id], queue="internal_scan",
+        )
+    if body.scan_type in ("external", "full"):
+        celery_app.send_task(
+            "app.workers.external_bot.external_scan_task",
+            args=[job_id, target_url], queue="external_scan",
+        )
 
     await create_audit_log(
         db, user_id=current.get("sub"), user_email=current.get("email", "unknown"),

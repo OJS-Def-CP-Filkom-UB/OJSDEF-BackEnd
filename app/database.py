@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     create_async_engine, AsyncSession, async_sessionmaker,
@@ -19,22 +21,41 @@ AsyncSessionLocal = async_sessionmaker(
 )
 
 
+@asynccontextmanager
+async def make_worker_session():
+    """Buat fresh async engine + session untuk Celery task.
+
+    Mencegah RuntimeError 'Future attached to a different loop' yang terjadi
+    saat engine module-level dipakai ulang lintas asyncio.run() calls di
+    Celery prefork workers.
+    """
+    worker_engine = create_async_engine(
+        settings.database_url,
+        pool_size=1,
+        max_overflow=0,
+        pool_pre_ping=True,
+    )
+    SessionLocal = async_sessionmaker(
+        worker_engine, class_=AsyncSession,
+        expire_on_commit=False, autoflush=False,
+    )
+    try:
+        async with SessionLocal() as session:
+            yield session
+    finally:
+        await worker_engine.dispose()
+
+
 async def set_tenant_context(session: AsyncSession, tenant_id: str) -> None:
     import uuid as _uuid
-    _uuid.UUID(tenant_id)  # raises ValueError if not a valid UUID
-    # PostgreSQL SET command does NOT support bind parameters ($1) — embed UUID
-    # directly as a literal. Safe because tenant_id is validated as a UUID above.
+    _uuid.UUID(tenant_id)
     await session.execute(
         text(f"SET LOCAL app.current_tenant_id = '{tenant_id}'")
     )
 
 
 async def get_db(request: Request):
-    """Yield a DB session with RLS tenant context already applied.
-
-    FastAPI auto-injects Request into Depends(get_db) — no changes needed
-    in route handlers. tenant_id is set by jwt_middleware into request.state.
-    """
+    """Yield a DB session with RLS tenant context already applied."""
     async with AsyncSessionLocal() as session:
         tenant_id = getattr(request.state, "tenant_id", None)
         if tenant_id:

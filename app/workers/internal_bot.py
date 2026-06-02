@@ -10,7 +10,7 @@ import httpx
 from sqlalchemy import select
 
 from app.celery_app import celery_app
-from app.database import AsyncSessionLocal
+from app.database import make_worker_session
 from app.models import OJSTarget, ScanJob, ScanFinding
 from app.scanners.internal.config_scanner import scan_config
 from app.scanners.internal.plugin_auditor import scan_plugins
@@ -19,6 +19,7 @@ from app.scanners.internal.file_integrity import scan_file_integrity
 from app.scanners.internal.content_detector import scan_content
 from app.scanners.internal.db_security import scan_db_security
 from app.services.crypto import decrypt_api_key
+from app.workers.utils import _try_trigger_scoring
 import redis.asyncio as aioredis
 from app.config import get_settings
 
@@ -53,7 +54,7 @@ async def _trigger_plugin_direct(trigger_endpoint: str, api_key: str, job_id: st
 
 async def _setup_internal_scan(job_id: str, target_id: str) -> None:
     """Set job to 'running' and trigger the plugin via Direct or Heartbeat mode."""
-    async with AsyncSessionLocal() as session:
+    async with make_worker_session() as session:
         target = (await session.execute(
             select(OJSTarget).where(OJSTarget.id == target_id)
         )).scalar_one_or_none()
@@ -65,9 +66,6 @@ async def _setup_internal_scan(job_id: str, target_id: str) -> None:
         )).scalar_one_or_none()
         if not job:
             return
-
-        job.status = "running"
-        await session.commit()
 
         api_key = (
             decrypt_api_key(target.plugin_api_key_encrypted)
@@ -85,7 +83,7 @@ async def _setup_internal_scan(job_id: str, target_id: str) -> None:
         # Direct Mode failed — fall through to heartbeat mode
 
     # Heartbeat Mode (or fallback): store pending job; plugin picks up on next heartbeat
-    async with AsyncSessionLocal() as session:
+    async with make_worker_session() as session:
         result = await session.execute(
             select(OJSTarget).where(OJSTarget.id == target_id)
         )
@@ -107,7 +105,7 @@ async def _run_internal_scan(job_id: str, data: dict) -> None:
         + scan_content(data.get("articles", []))
         + scan_db_security(data.get("db_config", {}))
     )
-    async with AsyncSessionLocal() as session:
+    async with make_worker_session() as session:
         job = (await session.execute(select(ScanJob).where(ScanJob.id == job_id))).scalar_one()
         for f in all_findings:
             session.add(ScanFinding(
@@ -126,6 +124,7 @@ async def _run_internal_scan(job_id: str, data: dict) -> None:
     progress["internal_done"] = True
     await r.setex(f"scan_progress:{job_id}", 3600, json.dumps(progress))
     await r.aclose()
+    await _try_trigger_scoring(job_id)
 
 
 @celery_app.task(

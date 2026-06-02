@@ -4,7 +4,7 @@ import json
 from sqlalchemy import select
 from urllib.parse import urlparse
 from app.celery_app import celery_app
-from app.database import AsyncSessionLocal
+from app.database import make_worker_session
 from app.models import ScanJob, ScanFinding
 from app.scanners.external.fingerprinter import scan_fingerprint
 from app.scanners.external.ssl_analyzer import scan_ssl
@@ -12,6 +12,7 @@ from app.scanners.external.header_checker import scan_headers
 from app.scanners.external.vuln_prober import scan_vulnerabilities
 from app.scanners.external.open_dir_detector import scan_open_dirs
 from app.scanners.external.cve_matcher import scan_cve
+from app.workers.utils import _try_trigger_scoring
 import redis.asyncio as aioredis
 from app.config import get_settings
 
@@ -29,7 +30,7 @@ async def _run_external_scan(job_id: str, target_url: str):
         + await scan_open_dirs(target_url)
         + await scan_cve(ojs_version)
     )
-    async with AsyncSessionLocal() as session:
+    async with make_worker_session() as session:
         job = (await session.execute(select(ScanJob).where(ScanJob.id == job_id))).scalar_one()
         for f in all_findings:
             session.add(ScanFinding(
@@ -47,6 +48,7 @@ async def _run_external_scan(job_id: str, target_url: str):
     progress["external_done"] = True
     await r.setex(f"scan_progress:{job_id}", 3600, json.dumps(progress))
     await r.aclose()
+    await _try_trigger_scoring(job_id)
 
 
 @celery_app.task(name="app.workers.external_bot.external_scan_task",

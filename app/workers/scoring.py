@@ -3,7 +3,7 @@ import json
 from datetime import datetime, timezone
 from sqlalchemy import select
 from app.celery_app import celery_app
-from app.database import AsyncSessionLocal
+from app.database import make_worker_session
 from app.models import ScanJob, ScanFinding
 from app.services.report import generate_pdf_report
 import redis.asyncio as aioredis
@@ -27,7 +27,7 @@ def _risk_level(score: float) -> str:
 
 
 async def _run_scoring(job_id: str):
-    async with AsyncSessionLocal() as session:
+    async with make_worker_session() as session:
         job = (await session.execute(select(ScanJob).where(ScanJob.id == job_id))).scalar_one()
         findings = (await session.execute(
             select(ScanFinding).where(ScanFinding.job_id == job_id,
