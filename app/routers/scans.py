@@ -199,3 +199,29 @@ async def mark_false_positive(
         cvss_score=f.cvss_score, cve_id=f.cve_id, owasp_category=f.owasp_category,
         is_false_positive=f.is_false_positive,
     )
+
+
+@router.post("/{job_id}/cancel", status_code=200)
+async def cancel_scan(
+    job_id: uuid.UUID,
+    current: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    job = (await db.execute(
+        select(ScanJob).where(ScanJob.id == job_id)
+    )).scalar_one_or_none()
+    if not job:
+        raise HTTPException(404, "Scan tidak ditemukan")
+    if job.status not in ("queued", "running"):
+        raise HTTPException(400, "Scan tidak dapat dibatalkan — status: " + job.status)
+    previous_status = job.status
+    job.status = "cancelled"
+    job.completed_at = datetime.now(timezone.utc)
+    await db.commit()
+    await create_audit_log(
+        db, user_id=current.get("sub"), user_email=current.get("email", "unknown"),
+        tenant_id=current.get("tenant_id"), action="scan.cancelled",
+        resource_type="scan", resource_id=str(job_id),
+        details={"previous_status": previous_status},
+    )
+    return {"status": "cancelled"}
