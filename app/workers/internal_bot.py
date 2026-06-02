@@ -140,6 +140,7 @@ async def _run_internal_scan(job_id: str, data: dict) -> None:
             ))
         await session.commit()
 
+    if await _check_cancelled(job_id): return
     await write_progress(
         job_id, "internal_audit", 7, 7,
         f"Pemindaian internal selesai — {len(all_findings)} temuan", "DONE",
