@@ -1,8 +1,9 @@
 import uuid
+import io
 import os
 import logging
 from jinja2 import Environment, FileSystemLoader
-from weasyprint import HTML
+from xhtml2pdf import pisa
 import boto3
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -34,7 +35,11 @@ async def generate_pdf_report(session: AsyncSession, job: ScanJob, findings: lis
         html = _jinja.get_template("report.html").render(
             job=job, target=target, findings=findings, severity_label=SEVERITY_LABEL,
         )
-        pdf = HTML(string=html).write_pdf()
+        output = io.BytesIO()
+        result = pisa.CreatePDF(html, dest=output)
+        if result.err:
+            raise RuntimeError(f"xhtml2pdf error code {result.err}")
+        pdf = output.getvalue()
         path = f"{job.tenant_id}/{job.id}/report.pdf"
         _s3().put_object(
             Bucket=settings.minio_bucket, Key=path,
