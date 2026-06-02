@@ -71,6 +71,7 @@ async def _run_external_scan(job_id: str, target_url: str):
     progress["external_done"] = True
     await r.setex(f"scan_progress:{job_id}", 3600, json.dumps(progress))
     await r.aclose()
+    if await _check_cancelled(job_id): return
     await _try_trigger_scoring(job_id)
 
 

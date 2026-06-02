@@ -208,7 +208,10 @@ async def cancel_scan(
     db: AsyncSession = Depends(get_db),
 ):
     job = (await db.execute(
-        select(ScanJob).where(ScanJob.id == job_id)
+        select(ScanJob).where(
+            ScanJob.id == job_id,
+            ScanJob.tenant_id == uuid.UUID(current["tenant_id"]),
+        )
     )).scalar_one_or_none()
     if not job:
         raise HTTPException(404, "Scan tidak ditemukan")
