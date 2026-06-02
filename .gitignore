@@ -219,3 +219,6 @@ __marimo__/
 
 # agent
 .agent/*
+
+# logs
+logs/
