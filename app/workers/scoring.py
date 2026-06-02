@@ -53,6 +53,8 @@ async def _run_scoring(job_id: str):
         job.completed_at = datetime.now(timezone.utc)
 
         sorted_findings = sorted(findings, key=lambda f: f.cvss_score, reverse=True)
+        tenant_id = str(job.tenant_id)
+        crit_ids = [str(f.id) for f in findings if f.severity == "critical"]
 
         await write_progress(job_id, "scoring", 2, 3, "Membuat laporan PDF...", "TASK")
         await generate_pdf_report(session, job, sorted_findings)
@@ -61,7 +63,7 @@ async def _run_scoring(job_id: str):
     await write_progress(job_id, "scoring", 3, 3, "Scan selesai", "DONE")
 
     r = aioredis.from_url(settings.redis_url, decode_responses=True)
-    await r.delete(f"dashboard_stats:{str(job.tenant_id)}")
+    await r.delete(f"dashboard_stats:{tenant_id}")
     raw = await r.get(f"scan_progress:{job_id}")
     progress = json.loads(raw) if raw else {}
     progress["scoring_done"] = True
@@ -69,7 +71,6 @@ async def _run_scoring(job_id: str):
     await r.aclose()
 
     if counts["critical"] > 0:
-        crit_ids = [str(f.id) for f in findings if f.severity == "critical"]
         celery_app.send_task(
             "app.workers.notify.send_critical_alert",
             args=[job_id, crit_ids], queue="notifications",
