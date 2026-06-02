@@ -6,7 +6,7 @@ from app.celery_app import celery_app
 from app.database import make_worker_session
 from app.models import ScanJob, ScanFinding
 from app.services.report import generate_pdf_report
-from app.workers.utils import write_progress
+from app.workers.utils import write_progress, _check_cancelled
 import redis.asyncio as aioredis
 from app.config import get_settings
 
@@ -28,6 +28,7 @@ def _risk_level(score: float) -> str:
 
 
 async def _run_scoring(job_id: str):
+    if await _check_cancelled(job_id): return
     await write_progress(job_id, "scoring", 1, 3, "Menghitung skor risiko CVSS...", "TASK")
 
     async with make_worker_session() as session:

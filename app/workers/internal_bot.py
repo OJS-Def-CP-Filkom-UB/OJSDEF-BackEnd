@@ -19,7 +19,7 @@ from app.scanners.internal.file_integrity import scan_file_integrity
 from app.scanners.internal.content_detector import scan_content
 from app.scanners.internal.db_security import scan_db_security
 from app.services.crypto import decrypt_api_key
-from app.workers.utils import _try_trigger_scoring, write_progress
+from app.workers.utils import _try_trigger_scoring, write_progress, _check_cancelled
 import redis.asyncio as aioredis
 from app.config import get_settings
 
@@ -98,20 +98,26 @@ async def _setup_internal_scan(job_id: str, target_id: str) -> None:
 
 async def _run_internal_scan(job_id: str, data: dict) -> None:
     """Process plugin-provided scan data and persist findings."""
+    if await _check_cancelled(job_id): return
     await write_progress(job_id, "internal_audit", 1, 7, "Plugin callback diterima, memproses data audit...", "INFO")
 
+    if await _check_cancelled(job_id): return
     await write_progress(job_id, "internal_audit", 2, 7, "Menganalisis konfigurasi OJS...", "TASK")
     config_findings = scan_config(data.get("config", {}))
 
+    if await _check_cancelled(job_id): return
     await write_progress(job_id, "internal_audit", 3, 7, "Memeriksa plugin yang terpasang...", "TASK")
     plugin_findings = scan_plugins(data.get("plugins", []))
 
+    if await _check_cancelled(job_id): return
     await write_progress(job_id, "internal_audit", 4, 7, "Mengaudit RBAC dan pengguna...", "TASK")
     rbac_findings = scan_rbac(data.get("users", []))
 
+    if await _check_cancelled(job_id): return
     await write_progress(job_id, "internal_audit", 5, 7, "Memeriksa integritas file...", "TASK")
     file_findings = scan_file_integrity(data.get("file_integrity", {}))
 
+    if await _check_cancelled(job_id): return
     await write_progress(job_id, "internal_audit", 6, 7, "Mendeteksi konten mencurigakan...", "TASK")
     content_findings = scan_content(data.get("articles", []))
     db_findings = scan_db_security(data.get("db_config", {}))
