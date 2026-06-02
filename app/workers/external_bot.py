@@ -12,7 +12,7 @@ from app.scanners.external.header_checker import scan_headers
 from app.scanners.external.vuln_prober import scan_vulnerabilities
 from app.scanners.external.open_dir_detector import scan_open_dirs
 from app.scanners.external.cve_matcher import scan_cve
-from app.workers.utils import _try_trigger_scoring
+from app.workers.utils import _try_trigger_scoring, write_progress
 import redis.asyncio as aioredis
 from app.config import get_settings
 
@@ -21,15 +21,27 @@ settings = get_settings()
 
 async def _run_external_scan(job_id: str, target_url: str):
     hostname = urlparse(target_url).hostname
+
+    await write_progress(job_id, "external_scan", 1, 7, "Mendeteksi versi OJS dan fingerprint...", "TASK")
     ojs_version, fp = await scan_fingerprint(target_url)
-    all_findings = (
-        fp
-        + (scan_ssl(hostname) if hostname else [])
-        + await scan_headers(target_url)
-        + await scan_vulnerabilities(target_url)
-        + await scan_open_dirs(target_url)
-        + await scan_cve(ojs_version)
-    )
+
+    await write_progress(job_id, "external_scan", 2, 7, "Memeriksa sertifikat SSL/TLS...", "TASK")
+    ssl_findings = scan_ssl(hostname) if hostname else []
+
+    await write_progress(job_id, "external_scan", 3, 7, "Menganalisis HTTP security headers...", "TASK")
+    header_findings = await scan_headers(target_url)
+
+    await write_progress(job_id, "external_scan", 4, 7, "Menguji kerentanan yang diketahui...", "TASK")
+    vuln_findings = await scan_vulnerabilities(target_url)
+
+    await write_progress(job_id, "external_scan", 5, 7, "Memeriksa direktori terbuka...", "TASK")
+    dir_findings = await scan_open_dirs(target_url)
+
+    await write_progress(job_id, "external_scan", 6, 7, "Mencocokkan CVE dari NVD...", "TASK")
+    cve_findings = await scan_cve(ojs_version)
+
+    all_findings = fp + ssl_findings + header_findings + vuln_findings + dir_findings + cve_findings
+
     async with make_worker_session() as session:
         job = (await session.execute(select(ScanJob).where(ScanJob.id == job_id))).scalar_one()
         for f in all_findings:
@@ -42,6 +54,11 @@ async def _run_external_scan(job_id: str, target_url: str):
                 cve_id=f.cve_id, owasp_category=f.owasp_category,
             ))
         await session.commit()
+
+    await write_progress(
+        job_id, "external_scan", 7, 7,
+        f"Pemindaian eksternal selesai — {len(all_findings)} temuan", "DONE",
+    )
     r = aioredis.from_url(settings.redis_url, decode_responses=True)
     raw = await r.get(f"scan_progress:{job_id}")
     progress = json.loads(raw) if raw else {}
