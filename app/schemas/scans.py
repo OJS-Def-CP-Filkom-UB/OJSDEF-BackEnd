@@ -12,7 +12,8 @@ class ScanProgress(BaseModel):
     stage: Literal["external_scan", "internal_audit", "scoring", "report_gen"]
     current_step: int
     total_steps: int
-    message: str  # Bahasa Indonesia, contoh: "Memeriksa header HTTP..."
+    message: str
+    log_type: Literal["INFO", "TASK", "DONE", "WARN"] = "INFO"
 
 
 class ScanResponse(BaseModel):
