@@ -6,6 +6,7 @@ from app.celery_app import celery_app
 from app.database import make_worker_session
 from app.models import ScanJob, ScanFinding
 from app.services.report import generate_pdf_report
+from app.workers.utils import write_progress
 import redis.asyncio as aioredis
 from app.config import get_settings
 
@@ -27,11 +28,15 @@ def _risk_level(score: float) -> str:
 
 
 async def _run_scoring(job_id: str):
+    await write_progress(job_id, "scoring", 1, 3, "Menghitung skor risiko CVSS...", "TASK")
+
     async with make_worker_session() as session:
         job = (await session.execute(select(ScanJob).where(ScanJob.id == job_id))).scalar_one()
         findings = (await session.execute(
-            select(ScanFinding).where(ScanFinding.job_id == job_id,
-                                      ScanFinding.is_false_positive == False)
+            select(ScanFinding).where(
+                ScanFinding.job_id == job_id,
+                ScanFinding.is_false_positive == False,
+            )
         )).scalars().all()
 
         counts = {s: sum(1 for f in findings if f.severity == s)
@@ -48,8 +53,12 @@ async def _run_scoring(job_id: str):
         job.completed_at = datetime.now(timezone.utc)
 
         sorted_findings = sorted(findings, key=lambda f: f.cvss_score, reverse=True)
+
+        await write_progress(job_id, "scoring", 2, 3, "Membuat laporan PDF...", "TASK")
         await generate_pdf_report(session, job, sorted_findings)
         await session.commit()
+
+    await write_progress(job_id, "scoring", 3, 3, "Scan selesai", "DONE")
 
     r = aioredis.from_url(settings.redis_url, decode_responses=True)
     await r.delete(f"dashboard_stats:{str(job.tenant_id)}")
@@ -61,8 +70,10 @@ async def _run_scoring(job_id: str):
 
     if counts["critical"] > 0:
         crit_ids = [str(f.id) for f in findings if f.severity == "critical"]
-        celery_app.send_task("app.workers.notify.send_critical_alert",
-                             args=[job_id, crit_ids], queue="notifications")
+        celery_app.send_task(
+            "app.workers.notify.send_critical_alert",
+            args=[job_id, crit_ids], queue="notifications",
+        )
 
 
 @celery_app.task(name="app.workers.scoring.scoring_task",
