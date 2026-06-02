@@ -19,7 +19,7 @@ from app.scanners.internal.file_integrity import scan_file_integrity
 from app.scanners.internal.content_detector import scan_content
 from app.scanners.internal.db_security import scan_db_security
 from app.services.crypto import decrypt_api_key
-from app.workers.utils import _try_trigger_scoring
+from app.workers.utils import _try_trigger_scoring, write_progress
 import redis.asyncio as aioredis
 from app.config import get_settings
 
@@ -53,7 +53,7 @@ async def _trigger_plugin_direct(trigger_endpoint: str, api_key: str, job_id: st
 
 
 async def _setup_internal_scan(job_id: str, target_id: str) -> None:
-    """Set job to 'running' and trigger the plugin via Direct or Heartbeat mode."""
+    """Trigger the plugin via Direct or Heartbeat mode."""
     async with make_worker_session() as session:
         target = (await session.execute(
             select(OJSTarget).where(OJSTarget.id == target_id)
@@ -75,14 +75,15 @@ async def _setup_internal_scan(job_id: str, target_id: str) -> None:
         connection_mode = target.connection_mode or "unknown"
         trigger_ep = target.trigger_endpoint
 
-    # Direct Mode: POST to plugin's trigger endpoint
+    await write_progress(job_id, "internal_audit", 1, 2, "Mengirim permintaan audit ke plugin OJS...", "TASK")
+
     if connection_mode == "direct" and trigger_ep and api_key:
         success = await _trigger_plugin_direct(trigger_ep, api_key, job_id)
         if success:
+            await write_progress(job_id, "internal_audit", 2, 2, "Plugin merespons, menunggu callback...", "INFO")
             return
-        # Direct Mode failed — fall through to heartbeat mode
 
-    # Heartbeat Mode (or fallback): store pending job; plugin picks up on next heartbeat
+    await write_progress(job_id, "internal_audit", 2, 2, "Mode heartbeat — menunggu jadwal berikutnya...", "INFO")
     async with make_worker_session() as session:
         result = await session.execute(
             select(OJSTarget).where(OJSTarget.id == target_id)
@@ -97,14 +98,29 @@ async def _setup_internal_scan(job_id: str, target_id: str) -> None:
 
 async def _run_internal_scan(job_id: str, data: dict) -> None:
     """Process plugin-provided scan data and persist findings."""
+    await write_progress(job_id, "internal_audit", 1, 7, "Plugin callback diterima, memproses data audit...", "INFO")
+
+    await write_progress(job_id, "internal_audit", 2, 7, "Menganalisis konfigurasi OJS...", "TASK")
+    config_findings = scan_config(data.get("config", {}))
+
+    await write_progress(job_id, "internal_audit", 3, 7, "Memeriksa plugin yang terpasang...", "TASK")
+    plugin_findings = scan_plugins(data.get("plugins", []))
+
+    await write_progress(job_id, "internal_audit", 4, 7, "Mengaudit RBAC dan pengguna...", "TASK")
+    rbac_findings = scan_rbac(data.get("users", []))
+
+    await write_progress(job_id, "internal_audit", 5, 7, "Memeriksa integritas file...", "TASK")
+    file_findings = scan_file_integrity(data.get("file_integrity", {}))
+
+    await write_progress(job_id, "internal_audit", 6, 7, "Mendeteksi konten mencurigakan...", "TASK")
+    content_findings = scan_content(data.get("articles", []))
+    db_findings = scan_db_security(data.get("db_config", {}))
+
     all_findings = (
-        scan_config(data.get("config", {}))
-        + scan_plugins(data.get("plugins", []))
-        + scan_rbac(data.get("users", []))
-        + scan_file_integrity(data.get("file_integrity", {}))
-        + scan_content(data.get("articles", []))
-        + scan_db_security(data.get("db_config", {}))
+        config_findings + plugin_findings + rbac_findings
+        + file_findings + content_findings + db_findings
     )
+
     async with make_worker_session() as session:
         job = (await session.execute(select(ScanJob).where(ScanJob.id == job_id))).scalar_one()
         for f in all_findings:
@@ -117,6 +133,11 @@ async def _run_internal_scan(job_id: str, data: dict) -> None:
                 cve_id=f.cve_id, owasp_category=f.owasp_category,
             ))
         await session.commit()
+
+    await write_progress(
+        job_id, "internal_audit", 7, 7,
+        f"Pemindaian internal selesai — {len(all_findings)} temuan", "DONE",
+    )
 
     r = aioredis.from_url(settings.redis_url, decode_responses=True)
     raw = await r.get(f"scan_progress:{job_id}")
@@ -132,10 +153,6 @@ async def _run_internal_scan(job_id: str, data: dict) -> None:
     bind=True, max_retries=3, autoretry_for=(Exception,), default_retry_delay=60,
 )
 def internal_scan_task(self, job_id: str, target_id: str):
-    """Trigger the OJSDef plugin to run an internal scan.
-    Direct Mode: POST to plugin's /trigger endpoint immediately.
-    Heartbeat Mode: store pending job; plugin picks up on next heartbeat (~5 min).
-    """
     asyncio.run(_setup_internal_scan(job_id, target_id))
 
 
@@ -145,5 +162,4 @@ def internal_scan_task(self, job_id: str, target_id: str):
     autoretry_for=(Exception,), default_retry_delay=60,
 )
 def process_plugin_data_task(self, job_id: str, data: dict):
-    """Process scan data received from plugin callback and persist findings."""
     asyncio.run(_run_internal_scan(job_id, data))
