@@ -1,5 +1,6 @@
 import uuid
 import json
+import logging
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +13,8 @@ from app.services.auth import get_current_user, require_role
 from app.core.audit import create_audit_log
 from app.celery_app import celery_app
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/scans", tags=["scans"])
 settings = get_settings()
@@ -33,8 +36,9 @@ def _to_response(job: ScanJob, progress: dict | None = None) -> ScanResponse:
     if progress:
         try:
             parsed_progress = ScanProgress(**progress)
-        except Exception:
-            parsed_progress = None  # tolak progress yang malformed
+        except Exception as exc:
+            logger.warning("Malformed scan progress for job %s: %s", job.id, exc)
+            parsed_progress = None
     return ScanResponse(
         id=str(job.id), target_id=str(job.target_id),
         scan_type=job.scan_type, status=job.status,
