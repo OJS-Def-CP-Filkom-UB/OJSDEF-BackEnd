@@ -53,3 +53,14 @@ async def write_progress(
         await r.setex(f"scan_progress:{job_id}", 3600, json.dumps(data))
     finally:
         await r.aclose()
+
+
+async def _check_cancelled(job_id: str) -> bool:
+    from app.models import ScanJob
+    from app.database import make_worker_session
+    from sqlalchemy import select
+    async with make_worker_session() as session:
+        job = (await session.execute(
+            select(ScanJob).where(ScanJob.id == job_id)
+        )).scalar_one_or_none()
+        return job is not None and job.status == "cancelled"
