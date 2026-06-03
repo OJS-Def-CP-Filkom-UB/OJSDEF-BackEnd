@@ -8,12 +8,21 @@ class StartScanRequest(BaseModel):
     scan_type: str  # internal|external|full
 
 
+class ScanProgressLog(BaseModel):
+    step:  int
+    stage: str
+    msg:   str
+    type:  str
+    ts:    int
+
+
 class ScanProgress(BaseModel):
-    stage: Literal["external_scan", "internal_audit", "scoring", "report_gen"]
+    stage:        str
     current_step: int
-    total_steps: int
-    message: str
-    log_type: Literal["INFO", "TASK", "DONE", "WARN"] = "INFO"
+    total_steps:  int
+    message:      str
+    log_type:     str | None = None
+    log:          list[ScanProgressLog] = []
 
 
 class ScanResponse(BaseModel):
