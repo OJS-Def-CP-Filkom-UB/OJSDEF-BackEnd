@@ -21,6 +21,7 @@ from app.services.crypto import decrypt_api_key
 from app.workers.utils import _try_trigger_scoring, write_progress, _check_cancelled
 import redis.asyncio as aioredis
 from app.config import get_settings
+from app.workers.diagnostics import DIAGNOSTIC_CODES  # noqa: F401
 
 settings = get_settings()
 
@@ -49,6 +50,56 @@ async def _trigger_plugin_direct(trigger_endpoint: str, api_key: str, job_id: st
         return resp.status_code == 202
     except Exception:
         return False
+
+
+async def _probe_for_scan(probe_endpoint: str, api_key: str) -> tuple[str, str | None, str | None]:
+    """Probe sinkron untuk menentukan reachability saat scan dijalankan.
+
+    Returns (result, diagnostic_code, detail):
+      - ("DIRECT", None, None)         plugin reachable & challenge cocok
+      - ("FAIL", <code>, <detail>)     gagal, dengan kode diagnosa
+    """
+    challenge = uuid.uuid4().hex
+    body = json.dumps({"challenge": challenge}).encode()
+    headers = _sign_for_plugin(api_key, body)
+    try:
+        async with httpx.AsyncClient(timeout=10.0, verify=True) as client:
+            resp = await client.post(probe_endpoint, content=body, headers=headers)
+    except Exception as exc:
+        return ("FAIL", "PLUGIN_UNREACHABLE", f"{type(exc).__name__}: {exc}")
+
+    if resp.status_code == 401:
+        return ("FAIL", "HMAC_MISMATCH", "HTTP 401 di /probe — API key tidak cocok")
+    if resp.status_code >= 500:
+        return ("FAIL", "PROBE_HTTP_500", f"HTTP {resp.status_code} di /probe")
+    if resp.status_code != 200:
+        return ("FAIL", "PLUGIN_UNREACHABLE", f"HTTP {resp.status_code} di /probe")
+    try:
+        echoed = resp.json().get("challenge", "")
+    except Exception:
+        echoed = ""
+    if echoed != challenge:
+        return ("FAIL", "CHALLENGE_MISMATCH", "Challenge tidak di-echo dengan benar")
+    return ("DIRECT", None, None)
+
+
+async def _fail_job(job_id: str, code: str, detail: str) -> None:
+    """Tandai job failed + simpan diagnosa, lalu tulis WARN ke progress log."""
+    async with make_worker_session() as session:
+        job = (await session.execute(
+            select(ScanJob).where(ScanJob.id == job_id)
+        )).scalar_one_or_none()
+        if job:
+            job.status = "failed"
+            job.completed_at = datetime.now(timezone.utc)
+            job.diagnostic_code = code
+            job.diagnostic_detail = detail
+            job.error_message = detail
+            await session.commit()
+    await write_progress(
+        job_id, "internal_audit", 0, 0,
+        f"Scan gagal — {code}: {detail}", "WARN",
+    )
 
 
 async def _setup_internal_scan(job_id: str, target_id: str) -> None:
