@@ -19,7 +19,7 @@ class FindingResult:
 CVSS_SCORES: dict[str, float] = {
     "debug_mode_enabled": 7.5, "weak_db_password": 8.0, "exposed_db_backup": 9.0,
     "outdated_plugin": 6.5, "cve_vulnerable_plugin": 9.5, "disabled_security_plugin": 5.5,
-    "privilege_excess": 7.0, "inactive_admin": 5.0, "modified_core_file": 8.5,
+    "privilege_excess": 7.0, "inactive_admin": 5.0, "modified_core_file": 9.1,
     "unknown_file": 6.0, "missing_core_file": 7.5, "injected_content": 9.0,
     "malicious_redirect": 9.5, "exposed_iframe": 8.0,
     "ojs_version_exposed": 4.0, "outdated_ojs_version": 7.0,
@@ -28,6 +28,27 @@ CVSS_SCORES: dict[str, float] = {
     "reflected_xss": 8.5, "sql_error_exposed": 8.0, "path_traversal": 7.5,
     "open_directory": 7.0, "exposed_env_file": 9.5, "exposed_git": 9.0,
     "phpinfo_exposed": 7.0, "cve_ojs": 9.0,
+    # New external scanner finding types (C-2)
+    "http_no_https_redirect":     8.1,
+    "cookie_missing_secure_flag": 3.7,
+    "ojs_admin_endpoint_exposed": 5.8,
+    "ojs_oai_accessible":         2.6,
+    # New internal scanner finding types (C-1)
+    "debug_mode_active":           9.8,
+    "force_ssl_disabled":          8.1,
+    "smtp_no_auth":                5.3,
+    "db_password_empty":           8.0,
+    "api_key_too_short":           5.0,
+    "multiple_superadmin":         7.2,
+    "inactive_high_priv_account":  5.0,
+    "modified_plugin_file":        7.8,
+    "gambling_content":            9.5,
+    "eval_base64_injection":       9.8,
+    "hidden_iframe_injection":     8.3,
+    "phishing_tld_link":           7.5,
+    "js_redirect_injection":       6.1,
+    "disabled_plugins_installed":  4.3,
+    "excessive_active_plugins":    2.0,
 }
 
 
