@@ -102,48 +102,95 @@ async def _fail_job(job_id: str, code: str, detail: str) -> None:
     )
 
 
-async def _setup_internal_scan(job_id: str, target_id: str) -> None:
-    """Trigger the plugin via Direct or Heartbeat mode."""
+async def _load_target_and_job(job_id: str, target_id: str):
+    """Return (target, job_exists). target None jika tidak ditemukan."""
     async with make_worker_session() as session:
         target = (await session.execute(
             select(OJSTarget).where(OJSTarget.id == target_id)
         )).scalar_one_or_none()
-        if not target:
-            return
-
         job = (await session.execute(
             select(ScanJob).where(ScanJob.id == job_id)
         )).scalar_one_or_none()
-        if not job:
-            return
+    return target, (job is not None)
 
-        api_key = (
-            decrypt_api_key(target.plugin_api_key_encrypted)
-            if target.plugin_api_key_encrypted
-            else None
-        )
-        connection_mode = target.connection_mode or "unknown"
-        trigger_ep = target.trigger_endpoint
 
-    await write_progress(job_id, "internal_audit", 1, 2, "Mengirim permintaan audit ke plugin OJS...", "TASK")
-
-    if connection_mode == "direct" and trigger_ep and api_key:
-        success = await _trigger_plugin_direct(trigger_ep, api_key, job_id)
-        if success:
-            await write_progress(job_id, "internal_audit", 2, 2, "Plugin merespons, menunggu callback...", "INFO")
-            return
-
-    await write_progress(job_id, "internal_audit", 2, 2, "Mode heartbeat — menunggu jadwal berikutnya...", "INFO")
+async def _set_connection_mode(target_id: str, mode: str) -> None:
     async with make_worker_session() as session:
-        result = await session.execute(
+        t = (await session.execute(
             select(OJSTarget).where(OJSTarget.id == target_id)
-        )
-        t = result.scalar_one_or_none()
+        )).scalar_one_or_none()
+        if t:
+            t.connection_mode = mode
+            await session.commit()
+
+
+async def _queue_heartbeat_job(target_id: str, job_id: str) -> None:
+    async with make_worker_session() as session:
+        t = (await session.execute(
+            select(OJSTarget).where(OJSTarget.id == target_id)
+        )).scalar_one_or_none()
         if t:
             t.pending_scan_job_id = uuid.UUID(job_id)
-            if connection_mode == "direct":
-                t.connection_mode = "heartbeat"
             await session.commit()
+
+
+async def _setup_internal_scan(job_id: str, target_id: str) -> None:
+    """Pre-flight probe → direct trigger, atau fail-fast dengan diagnosa.
+
+    force_heartbeat=True melewati probe dan masuk antrian heartbeat (opt-in firewall).
+    """
+    target, job_exists = await _load_target_and_job(job_id, target_id)
+    if not target or not job_exists:
+        return
+
+    api_key = (
+        decrypt_api_key(target.plugin_api_key_encrypted)
+        if target.plugin_api_key_encrypted else None
+    )
+
+    await write_progress(
+        job_id, "internal_audit", 1, 2,
+        "Mengirim permintaan audit ke plugin OJS...", "TASK",
+    )
+
+    # Opt-in heartbeat (OJS di balik firewall) — perilaku lama, eksplisit
+    if getattr(target, "force_heartbeat", False):
+        await write_progress(
+            job_id, "internal_audit", 2, 2,
+            "Mode heartbeat — menunggu jadwal berikutnya...", "INFO",
+        )
+        await _queue_heartbeat_job(target_id, job_id)
+        return
+
+    if not api_key or not target.probe_endpoint:
+        await _fail_job(
+            job_id, "PLUGIN_UNREACHABLE",
+            "Plugin belum mengirim endpoint atau API key belum diset. "
+            "Pastikan plugin OJSDef aktif dan sudah mengirim heartbeat minimal sekali.",
+        )
+        return
+
+    result, code, detail = await _probe_for_scan(target.probe_endpoint, api_key)
+    if result != "DIRECT":
+        await _fail_job(job_id, code, detail)
+        return
+
+    if not target.trigger_endpoint:
+        await _fail_job(job_id, "TRIGGER_REJECTED", "trigger_endpoint kosong di target")
+        return
+
+    triggered = await _trigger_plugin_direct(target.trigger_endpoint, api_key, job_id)
+    if triggered:
+        await _set_connection_mode(target_id, "direct")
+        await write_progress(
+            job_id, "internal_audit", 2, 2,
+            "Plugin merespons, menunggu callback...", "INFO",
+        )
+    else:
+        await _fail_job(
+            job_id, "TRIGGER_REJECTED",
+            "Plugin tidak membalas HTTP 202 pada /trigger",
+        )
 
 
 async def _run_internal_scan(job_id: str, data: dict) -> None:
