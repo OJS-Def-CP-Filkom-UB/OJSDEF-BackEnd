@@ -10,32 +10,72 @@ from app.database import AsyncSessionLocal
 from app.models.scan_job import ScanJob
 from app.workers.utils import write_progress
 
+CALLBACK_TIMEOUT_MINUTES = 5
+STALE_TIMEOUT_MINUTES = 30
+
+
+def classify_stale_job(
+    status: str,
+    scan_type: str,
+    started_at: datetime | None,
+    created_at: datetime | None,
+    now: datetime,
+    callback_minutes: int = CALLBACK_TIMEOUT_MINUTES,
+    general_minutes: int = STALE_TIMEOUT_MINUTES,
+) -> str | None:
+    """Klasifikasi job macet. Pure function — mudah diuji.
+
+    - CALLBACK_TIMEOUT: internal/full running > 5 menit (nunggu callback plugin)
+    - STALE:            queued/running > 30 menit (jaring umum)
+    - None:             tidak macet
+    """
+    if status not in ("queued", "running"):
+        return None
+    if (
+        status == "running"
+        and scan_type in ("internal", "full")
+        and started_at is not None
+        and started_at < now - timedelta(minutes=callback_minutes)
+    ):
+        return "CALLBACK_TIMEOUT"
+    if created_at is not None and created_at < now - timedelta(minutes=general_minutes):
+        return "STALE"
+    return None
+
 
 @celery_app.task(name="app.workers.tasks.cleanup_stale_pending_jobs")
 def cleanup_stale_pending_jobs() -> str:
-    """Mark queued/running scan jobs > 30 menit tanpa callback sebagai failed."""
+    """Tandai job macet sebagai failed dengan diagnosa yang sesuai."""
 
     async def _run() -> int:
-        threshold = datetime.now(timezone.utc) - timedelta(minutes=30)
+        now = datetime.now(timezone.utc)
+        count = 0
         async with AsyncSessionLocal() as session:
             result = await session.execute(
-                select(ScanJob).where(
-                    ScanJob.status.in_(["queued", "running"]),
-                    ScanJob.created_at < threshold,
-                )
+                select(ScanJob).where(ScanJob.status.in_(["queued", "running"]))
             )
-            stale = result.scalars().all()
-            for job in stale:
-                await write_progress(
-                    str(job.id), "scan", 0, 0,
-                    "Scan timeout: plugin tidak merespons dalam 30 menit", "WARN",
+            for job in result.scalars().all():
+                verdict = classify_stale_job(
+                    status=job.status, scan_type=job.scan_type,
+                    started_at=job.started_at, created_at=job.created_at, now=now,
                 )
-                job.status        = "failed"
-                job.completed_at  = datetime.now(timezone.utc)
-                job.error_message = "Scan timeout: tidak ada respons dalam 30 menit"
-            if stale:
+                if verdict is None:
+                    continue
+                if verdict == "CALLBACK_TIMEOUT":
+                    msg = "Scan timeout: plugin menerima permintaan tapi tidak mengirim hasil dalam 5 menit"
+                    job.diagnostic_code = "CALLBACK_TIMEOUT"
+                else:
+                    msg = "Scan timeout: tidak ada respons dalam 30 menit"
+                    job.diagnostic_code = job.diagnostic_code or "PLUGIN_UNREACHABLE"
+                await write_progress(str(job.id), "scan", 0, 0, msg, "WARN")
+                job.status = "failed"
+                job.completed_at = now
+                job.error_message = msg
+                job.diagnostic_detail = job.diagnostic_detail or msg
+                count += 1
+            if count:
                 await session.commit()
-            return len(stale)
+            return count
 
     count = asyncio.run(_run())
     return f"Cleaned up {count} stale pending jobs"
