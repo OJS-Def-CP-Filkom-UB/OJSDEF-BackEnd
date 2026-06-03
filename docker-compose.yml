@@ -30,6 +30,10 @@ services:
     <<: *app
     command: celery -A app.celery_app worker -Q notifications --concurrency=4 --loglevel=info
 
+  celery-beat:
+    <<: *app
+    command: celery -A app.celery_app beat --loglevel=info
+
   flower:
     <<: *app
     command: celery -A app.celery_app flower --port=5555 --basic_auth=${FLOWER_BASIC_AUTH}
