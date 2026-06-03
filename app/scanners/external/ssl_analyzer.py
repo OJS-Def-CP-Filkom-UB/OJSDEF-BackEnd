@@ -2,6 +2,7 @@ import ssl
 import socket
 from datetime import datetime, timezone
 from app.scanners.models import FindingResult, make_finding
+import httpx
 
 
 def scan_ssl(hostname: str) -> list[FindingResult]:
@@ -78,3 +79,36 @@ def scan_ssl(hostname: str) -> list[FindingResult]:
         pass
 
     return findings
+
+
+async def scan_http_redirect(hostname: str) -> list[FindingResult]:
+    """
+    Cek apakah HTTP (port 80) redirect ke HTTPS.
+    Return finding jika tidak ada redirect ke HTTPS.
+    Return [] jika port 80 tidak reachable. Never raises.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=5, follow_redirects=False) as c:
+            resp = await c.get(f"http://{hostname}")
+        if resp.status_code in (301, 302, 307, 308):
+            location = resp.headers.get("location", "")
+            if location.startswith("https://"):
+                return []  # redirect ke HTTPS sudah ada — aman
+        return [make_finding(
+            "http_no_https_redirect",
+            category="external",
+            title="HTTP Tidak Redirect ke HTTPS",
+            description=(
+                f"Server {hostname} merespons HTTP tanpa redirect ke HTTPS. "
+                "Kredensial login dan data sesi dapat disadap via man-in-the-middle attack."
+            ),
+            affected_path=f"http://{hostname}",
+            evidence=f"HTTP {resp.status_code} tanpa Location: https://",
+            remediation=(
+                "Tambahkan redirect 301 dari HTTP ke HTTPS di konfigurasi Nginx: "
+                "`return 301 https://$host$request_uri;`"
+            ),
+            owasp_category="A02:2021-Cryptographic-Failures",
+        )]
+    except Exception:
+        return []
