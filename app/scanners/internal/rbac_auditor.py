@@ -1,55 +1,54 @@
-from datetime import datetime, timezone, timedelta
 from app.scanners.models import FindingResult, make_finding
 
 
-def scan_rbac(users: list[dict]) -> list[FindingResult]:
+def scan_rbac(rbac: dict) -> list[FindingResult]:
+    """
+    Analisis output PHP RbacAuditor. Format input:
+    {total_users, superadmin_count, multiple_superadmin: bool,
+     inactive_high_priv_count, inactive_high_priv_users: [{user_id, last_login}]}
+    """
     findings = []
-    stale_threshold = datetime.now(timezone.utc) - timedelta(days=180)
 
-    for u in users:
-        name = u.get("username", "unknown")
-        roles = set(u.get("roles", []))
+    # B-4: Multiple superadmin (CVSS 7.2 — High)
+    if rbac.get("multiple_superadmin"):
+        count = rbac.get("superadmin_count", 0)
+        findings.append(make_finding(
+            "multiple_superadmin",
+            category="internal",
+            title=f"Terdapat {count} Akun Site Administrator",
+            description=(
+                f"Ada {count} akun Site Administrator aktif. "
+                "Setiap akun superadmin yang tidak diperlukan memperluas attack surface. "
+                "Prinsip least privilege dilanggar."
+            ),
+            affected_path="users/site_administrators",
+            evidence=f"superadmin_count = {count}",
+            remediation=(
+                "Pertahankan hanya 1 akun Site Administrator aktif. "
+                "Hapus atau downgrade role akun lainnya ke Journal Manager."
+            ),
+        ))
 
-        # Check for excessive privileges: Site Administrator + Journal Manager + extra roles
-        if {"Site Administrator", "Journal Manager"}.issubset(roles) and len(roles) > 2:
-            findings.append(make_finding(
-                "privilege_excess",
-                category="internal",
-                title=f"Pengguna {name} Kelebihan Hak Akses",
-                description=(
-                    f"Pengguna {name} memiliki kombinasi peran tinggi yang berlebihan: "
-                    f"{', '.join(sorted(roles))}."
-                ),
-                affected_path=f"users/{name}",
-                evidence=f"roles={sorted(list(roles))}",
-                remediation=(
-                    "Terapkan prinsip least privilege — berikan satu peran per pengguna "
-                    "sesuai kebutuhannya."
-                ),
-            ))
-
-        # Check for inactive admins (>180 days since last login)
-        last_str = u.get("last_login")
-        if last_str and "Administrator" in str(roles):
-            try:
-                last = datetime.fromisoformat(last_str.replace("Z", "+00:00"))
-                if last < stale_threshold:
-                    findings.append(make_finding(
-                        "inactive_admin",
-                        category="internal",
-                        title=f"Admin {name} Tidak Aktif Lebih dari 6 Bulan",
-                        description=(
-                            f"Akun admin {name} terakhir login pada {last_str}. "
-                            "Akun admin tidak aktif meningkatkan risiko keamanan."
-                        ),
-                        affected_path=f"users/{name}",
-                        evidence=f"last_login={last_str}",
-                        remediation=(
-                            f"Nonaktifkan atau hapus akun admin {name} yang tidak aktif, "
-                            "atau konfirmasi keperluan akun tersebut."
-                        ),
-                    ))
-            except ValueError:
-                pass
+    # P-3: Akun high-privilege tidak aktif > 1 tahun (CVSS 5.0 — Medium)
+    for user in rbac.get("inactive_high_priv_users", []):
+        uid  = user.get("user_id", "unknown")
+        last = user.get("last_login", "tidak diketahui")
+        findings.append(make_finding(
+            "inactive_high_priv_account",
+            category="internal",
+            title=f"Akun Admin Tidak Aktif > 1 Tahun (ID: {uid})",
+            description=(
+                f"Akun dengan hak akses tinggi (user ID: {uid}) "
+                f"terakhir login pada {last}. "
+                "Akun tidak aktif dapat menjadi target credential stuffing "
+                "tanpa diketahui pemiliknya."
+            ),
+            affected_path=f"users/{uid}",
+            evidence=f"user_id={uid}, last_login={last}",
+            remediation=(
+                f"Nonaktifkan atau hapus akun admin (ID: {uid}) "
+                "yang tidak digunakan lebih dari 1 tahun."
+            ),
+        ))
 
     return findings
