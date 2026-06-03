@@ -1,4 +1,5 @@
 import json
+import time
 import redis.asyncio as aioredis
 from app.celery_app import celery_app
 from app.config import get_settings
@@ -41,15 +42,19 @@ async def write_progress(
 ) -> None:
     r = aioredis.from_url(settings.redis_url, decode_responses=True)
     try:
-        raw = await r.get(f"scan_progress:{job_id}")
+        raw  = await r.get(f"scan_progress:{job_id}")
         data = json.loads(raw) if raw else {}
         data.update({
-            "stage": stage,
-            "current_step": step,
-            "total_steps": total,
-            "message": message,
-            "log_type": log_type,
+            "stage": stage, "current_step": step,
+            "total_steps": total, "message": message, "log_type": log_type,
         })
+        log = data.get("log", [])
+        log.append({
+            "step": step, "stage": stage,
+            "msg": message, "type": log_type,
+            "ts": int(time.time()),
+        })
+        data["log"] = log
         await r.setex(f"scan_progress:{job_id}", 3600, json.dumps(data))
     finally:
         await r.aclose()
