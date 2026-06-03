@@ -222,3 +222,6 @@ __marimo__/
 
 # logs
 logs/
+
+# etc
+bash.exe.stackdump
