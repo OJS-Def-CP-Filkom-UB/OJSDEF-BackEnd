@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import DateTime, String, Boolean, Text, ForeignKey
+from sqlalchemy import DateTime, String, Boolean, Text, ForeignKey, false as sa_false
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from app.models.base import Base, TimestampMixin
@@ -24,3 +24,5 @@ class OJSTarget(Base, TimestampMixin):
     connection_mode: Mapped[str | None] = mapped_column(String(20), nullable=True, default="unknown")
     # Heartbeat mode: stores job waiting for next heartbeat trigger; cleared after callback received
     pending_scan_job_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    # Opt-in: paksa mode heartbeat untuk OJS di balik firewall (lewati pre-flight probe)
+    force_heartbeat: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=sa_false())
