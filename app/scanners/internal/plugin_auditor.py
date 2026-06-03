@@ -1,50 +1,57 @@
 from app.scanners.models import FindingResult, make_finding
 
-KNOWN_SECURITY_PLUGINS = {"orcidProfile", "acron", "dois"}
 
-
-def scan_plugins(plugins: list[dict]) -> list[FindingResult]:
+def scan_plugins(plugins_data: dict) -> list[FindingResult]:
+    """
+    Analisis output PHP PluginAuditor. Format input:
+    {total_installed, total_enabled,
+     disabled_but_installed: [{name, category, version, enabled, path}],
+     plugins: [...]}
+    """
     findings = []
 
-    for p in plugins:
-        name = p.get("name", "unknown")
-        version = p.get("version", "0")
+    total_enabled = plugins_data.get("total_enabled", 0)
+    disabled      = plugins_data.get("disabled_but_installed", [])
 
-        # Check for known CVEs first
-        for cve in p.get("cve_ids", []):
-            findings.append(make_finding(
-                "cve_vulnerable_plugin",
-                category="internal",
-                title=f"Plugin {name} Rentan CVE",
-                description=f"Plugin {name} v{version} memiliki kerentanan yang tercatat: {cve}.",
-                affected_path=f"plugins/{name}",
-                evidence=f"version={version}, cve={cve}",
-                remediation=f"Update plugin {name} ke versi terbaru yang telah memperbaiki kerentanan ini.",
-                cve_id=cve,
-            ))
+    # P-4: Plugin terinstall tapi dinonaktifkan (CVSS 4.3 — Medium)
+    if len(disabled) > 0:
+        names = ", ".join(p.get("name", "?") for p in disabled[:5])
+        if len(disabled) > 5:
+            names += f" (+{len(disabled) - 5} lainnya)"
+        findings.append(make_finding(
+            "disabled_plugins_installed",
+            category="internal",
+            title=f"{len(disabled)} Plugin Terinstall tapi Dinonaktifkan",
+            description=(
+                f"Ada {len(disabled)} plugin yang masih ada di filesystem tapi tidak aktif: {names}. "
+                "Plugin tidak aktif tetap mengandung kode yang bisa dieksploitasi "
+                "jika memiliki kerentanan."
+            ),
+            affected_path="plugins/",
+            evidence=f"disabled_but_installed count = {len(disabled)}: {names}",
+            remediation=(
+                "Uninstall plugin yang tidak diperlukan melalui OJS Plugin Gallery "
+                "(Website Settings → Plugins → Plugin Gallery → Uninstall)."
+            ),
+        ))
 
-        # Outdated plugin (only if no CVEs reported)
-        if not p.get("cve_ids") and p.get("outdated"):
-            findings.append(make_finding(
-                "outdated_plugin",
-                category="internal",
-                title=f"Plugin {name} Sudah Usang",
-                description=f"Plugin {name} v{version} tidak diperbarui ke versi terbaru.",
-                affected_path=f"plugins/{name}",
-                evidence=f"version={version}",
-                remediation=f"Update plugin {name} ke versi terbaru melalui panel admin OJS.",
-            ))
-
-        # Disabled security plugin
-        if not p.get("enabled") and name in KNOWN_SECURITY_PLUGINS:
-            findings.append(make_finding(
-                "disabled_security_plugin",
-                category="internal",
-                title=f"Plugin Keamanan {name} Dinonaktifkan",
-                description=f"Plugin penting untuk keamanan {name} tidak aktif.",
-                affected_path=f"plugins/{name}",
-                evidence="enabled=false",
-                remediation=f"Aktifkan plugin {name} melalui panel admin OJS.",
-            ))
+    # A-4: Terlalu banyak plugin aktif — informatif (CVSS 2.0 — Low)
+    if total_enabled > 20:
+        findings.append(make_finding(
+            "excessive_active_plugins",
+            category="internal",
+            title=f"{total_enabled} Plugin Aktif — Audit Disarankan",
+            description=(
+                f"Terdapat {total_enabled} plugin aktif. "
+                "Setiap plugin menambah attack surface secara proporsional. "
+                "Lakukan audit berkala untuk memastikan semua plugin benar-benar diperlukan."
+            ),
+            affected_path="plugins/",
+            evidence=f"total_enabled = {total_enabled}",
+            remediation=(
+                "Nonaktifkan atau uninstall plugin yang tidak digunakan "
+                "melalui OJS Plugin Gallery."
+            ),
+        ))
 
     return findings
