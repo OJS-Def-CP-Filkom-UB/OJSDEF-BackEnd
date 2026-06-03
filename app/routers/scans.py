@@ -45,6 +45,8 @@ def _to_response(job: ScanJob, progress: dict | None = None) -> ScanResponse:
         overall_score=job.overall_score, risk_level=job.risk_level,
         critical_count=job.critical_count, high_count=job.high_count,
         medium_count=job.medium_count, low_count=job.low_count,
+        diagnostic_code=job.diagnostic_code,
+        diagnostic_detail=job.diagnostic_detail,
         progress=parsed_progress, created_at=job.created_at,
     )
 

@@ -37,6 +37,8 @@ class ScanResponse(BaseModel):
     medium_count: int
     low_count: int
     progress: ScanProgress | None = None
+    diagnostic_code: str | None = None
+    diagnostic_detail: str | None = None
     created_at: datetime
 
 
