@@ -17,7 +17,6 @@ from app.scanners.internal.plugin_auditor import scan_plugins
 from app.scanners.internal.rbac_auditor import scan_rbac
 from app.scanners.internal.file_integrity import scan_file_integrity
 from app.scanners.internal.content_detector import scan_content
-from app.scanners.internal.db_security import scan_db_security
 from app.services.crypto import decrypt_api_key
 from app.workers.utils import _try_trigger_scoring, write_progress, _check_cancelled
 import redis.asyncio as aioredis
@@ -101,30 +100,31 @@ async def _run_internal_scan(job_id: str, data: dict) -> None:
     if await _check_cancelled(job_id): return
     await write_progress(job_id, "internal_audit", 1, 7, "Plugin callback diterima, memproses data audit...", "INFO")
 
+    results = data.get("results", {})
+
     if await _check_cancelled(job_id): return
     await write_progress(job_id, "internal_audit", 2, 7, "Menganalisis konfigurasi OJS...", "TASK")
-    config_findings = scan_config(data.get("config", {}))
+    config_findings = scan_config(results.get("config", {}))
 
     if await _check_cancelled(job_id): return
     await write_progress(job_id, "internal_audit", 3, 7, "Memeriksa plugin yang terpasang...", "TASK")
-    plugin_findings = scan_plugins(data.get("plugins", []))
+    plugin_findings = scan_plugins(results.get("plugins", {}))
 
     if await _check_cancelled(job_id): return
     await write_progress(job_id, "internal_audit", 4, 7, "Mengaudit RBAC dan pengguna...", "TASK")
-    rbac_findings = scan_rbac(data.get("users", []))
+    rbac_findings = scan_rbac(results.get("rbac", {}))
 
     if await _check_cancelled(job_id): return
     await write_progress(job_id, "internal_audit", 5, 7, "Memeriksa integritas file...", "TASK")
-    file_findings = scan_file_integrity(data.get("file_integrity", {}))
+    file_findings = scan_file_integrity(results.get("file_integrity", {}))
 
     if await _check_cancelled(job_id): return
     await write_progress(job_id, "internal_audit", 6, 7, "Mendeteksi konten mencurigakan...", "TASK")
-    content_findings = scan_content(data.get("articles", []))
-    db_findings = scan_db_security(data.get("db_config", {}))
+    content_findings = scan_content(results.get("content", {}))
 
     all_findings = (
         config_findings + plugin_findings + rbac_findings
-        + file_findings + content_findings + db_findings
+        + file_findings + content_findings
     )
 
     async with make_worker_session() as session:
