@@ -8,6 +8,7 @@ from sqlalchemy import select
 from app.celery_app import celery_app
 from app.database import AsyncSessionLocal
 from app.models.scan_job import ScanJob
+from app.workers.utils import write_progress
 
 
 @celery_app.task(name="app.workers.tasks.cleanup_stale_pending_jobs")
@@ -25,7 +26,12 @@ def cleanup_stale_pending_jobs() -> str:
             )
             stale = result.scalars().all()
             for job in stale:
-                job.status = "failed"
+                await write_progress(
+                    str(job.id), "scan", 0, 0,
+                    "Scan timeout: plugin tidak merespons dalam 30 menit", "WARN",
+                )
+                job.status        = "failed"
+                job.completed_at  = datetime.now(timezone.utc)
                 job.error_message = "Scan timeout: tidak ada respons dalam 30 menit"
             if stale:
                 await session.commit()
