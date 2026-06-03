@@ -1,77 +1,68 @@
-import re
 from app.scanners.models import FindingResult, make_finding
 
-GAMBLING = re.compile(
-    r"(slot\s*online|togel|judi\s*bola|casino|poker\s*online)", re.I
-)
-IFRAME = re.compile(r"<iframe[^>]+src=[\"'][^\"']+[\"']", re.I)
-META_REDIRECT = re.compile(
-    r'<meta[^>]+http-equiv=["\']refresh["\'][^>]*url=', re.I
-)
+PATTERN_FINDINGS: dict[str, tuple[str, str, str]] = {
+    "gambling_keyword": (
+        "gambling_content",
+        "Konten Judi/Spam Ditemukan",
+        "Hapus konten yang mengandung kata kunci judi online. "
+        "Audit akses akun editor dan tinjau seluruh konten jurnal.",
+    ),
+    "base64_eval": (
+        "eval_base64_injection",
+        "Injeksi eval(base64) Ditemukan — Indikator Kompromi",
+        "Hapus segera script berbahaya dari konten. "
+        "Lakukan audit menyeluruh pada seluruh file server dan database.",
+    ),
+    "hidden_iframe": (
+        "hidden_iframe_injection",
+        "iFrame Tersembunyi Ditemukan",
+        "Hapus tag iframe dari konten. "
+        "Aktifkan Content-Security-Policy untuk memblokir iframe eksternal.",
+    ),
+    "phishing_tld": (
+        "phishing_tld_link",
+        "Link dengan TLD Berisiko Tinggi Ditemukan",
+        "Hapus atau ganti link dengan domain yang legitimate (.com, .ac.id, .edu). "
+        "Verifikasi semua link eksternal di konten jurnal.",
+    ),
+    "js_redirect": (
+        "js_redirect_injection",
+        "JavaScript Redirect Tersembunyi Ditemukan",
+        "Hapus script redirect dari konten. "
+        "Audit semua custom HTML di settings OJS.",
+    ),
+}
 
 
-def scan_content(articles: list[dict]) -> list[FindingResult]:
+def scan_content(content: dict) -> list[FindingResult]:
+    """
+    Analisis output PHP ContentInjectionDetector. Format input:
+    {total_scanned, affected_count,
+     detections: [{submission_id: int|null, field: str, pattern: str, excerpt: str}]}
+    submission_id=null berarti deteksi dari settings (journal.about, journal.footer, dll.)
+    """
     findings = []
 
-    for a in articles:
-        aid = a.get("id", "unknown")
-        title = a.get("title", "")
-        content = a.get("content", "")
-        path = f"articles/{aid}"
+    for detection in content.get("detections", []):
+        pattern = detection.get("pattern", "")
+        field   = detection.get("field", "unknown")
+        excerpt = detection.get("excerpt", "")
+        sub_id  = detection.get("submission_id")
 
-        # Check for gambling/spam content in title or body
-        if GAMBLING.search(title) or GAMBLING.search(content):
-            findings.append(make_finding(
-                "injected_content",
-                category="internal",
-                title="Konten Judi/Spam Ditemukan di Artikel",
-                description=(
-                    f"Artikel #{aid} mengandung kata kunci judi online atau spam "
-                    "yang mengindikasikan kompromi konten."
-                ),
-                affected_path=path,
-                evidence=f"title: {title[:80]}",
-                remediation=(
-                    "Hapus atau nonpublikasikan artikel yang terinfeksi. "
-                    "Audit akses akun editor dan penulis."
-                ),
-            ))
+        if pattern not in PATTERN_FINDINGS:
+            continue
 
-        # Check for meta refresh redirects
-        if META_REDIRECT.search(content):
-            findings.append(make_finding(
-                "malicious_redirect",
-                category="internal",
-                title="Meta Redirect Mencurigakan di Artikel",
-                description=(
-                    f"Artikel #{aid} mengandung meta refresh redirect yang "
-                    "dapat mengarahkan pengunjung ke situs berbahaya."
-                ),
-                affected_path=path,
-                evidence="meta refresh redirect ditemukan di konten artikel",
-                remediation=(
-                    "Hapus tag meta redirect dari konten. "
-                    "Audit semua artikel lainnya untuk pola serupa."
-                ),
-            ))
+        ftype, title, remediation = PATTERN_FINDINGS[pattern]
+        location = f"article/{sub_id}" if sub_id is not None else f"settings/{field}"
 
-        # Check for external iframes
-        m = IFRAME.search(content)
-        if m:
-            findings.append(make_finding(
-                "exposed_iframe",
-                category="internal",
-                title="iFrame Eksternal di Artikel",
-                description=(
-                    f"Artikel #{aid} menyematkan iframe dari sumber eksternal yang "
-                    "dapat digunakan untuk clickjacking atau konten berbahaya."
-                ),
-                affected_path=path,
-                evidence=m.group(0)[:200],
-                remediation=(
-                    "Hapus iframe yang tidak dikenal sumbernya. "
-                    "Audit seluruh konten artikel untuk iframe mencurigakan."
-                ),
-            ))
+        findings.append(make_finding(
+            ftype,
+            category="internal",
+            title=title,
+            description=f"Pattern berbahaya '{pattern}' ditemukan di {location}.",
+            affected_path=location,
+            evidence=excerpt[:200] if excerpt else f"pattern={pattern}",
+            remediation=remediation,
+        ))
 
     return findings
