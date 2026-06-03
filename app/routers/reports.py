@@ -1,6 +1,7 @@
+import io
 import uuid
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import boto3
@@ -47,17 +48,21 @@ async def download_pdf(
     report = result.scalar_one_or_none()
     if not report or not report.storage_path:
         raise HTTPException(404, "Laporan PDF tidak ditemukan")
-    url = _s3().generate_presigned_url(
-        "get_object",
-        Params={"Bucket": settings.minio_bucket, "Key": report.storage_path},
-        ExpiresIn=3600,
-    )
+
+    obj      = _s3().get_object(Bucket=settings.minio_bucket, Key=report.storage_path)
+    pdf_data = obj["Body"].read()
+
     await create_audit_log(
         db, user_id=current.get("sub"), user_email=current.get("email", "unknown"),
         tenant_id=current.get("tenant_id"), action="report.exported",
         resource_type="report", resource_id=str(report_id), details={"format": "pdf"},
     )
-    return RedirectResponse(url)
+    filename = f"ojsdef-report-{str(report_id)[:8]}.pdf"
+    return StreamingResponse(
+        io.BytesIO(pdf_data),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
 
 
 @router.get("/{report_id}/json")
