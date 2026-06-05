@@ -10,7 +10,7 @@ from app.schemas.admin import (
     CreateUserRequest, CreateUserResponse, PatchUserRequest,
     CreateTenantRequest, TenantResponse,
 )
-from app.services.auth import require_role, hash_password, get_current_user
+from app.services.auth import require_role, hash_password
 from app.core.audit import create_audit_log
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
@@ -81,11 +81,11 @@ async def list_users(db: AsyncSession = Depends(get_db)):
     ]
 
 
-@router.patch("/users/{user_id}", dependencies=[_saas])
+@router.patch("/users/{user_id}")
 async def patch_user(
     user_id: uuid.UUID,
     body: PatchUserRequest,
-    current: dict = Depends(get_current_user),
+    current: dict = Depends(require_role("saas_admin")),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(User).where(User.id == user_id))
@@ -104,10 +104,10 @@ async def patch_user(
     return {"id": str(user.id), "is_active": user.is_active, "role": user.role}
 
 
-@router.delete("/users/{user_id}", status_code=204, dependencies=[_saas])
+@router.delete("/users/{user_id}", status_code=204)
 async def delete_user(
     user_id: uuid.UUID,
-    current: dict = Depends(get_current_user),
+    current: dict = Depends(require_role("saas_admin")),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(User).where(User.id == user_id))

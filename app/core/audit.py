@@ -19,18 +19,17 @@ async def create_audit_log(
 ) -> None:
     """Record audit log. Fails silently — does not block the main request."""
     try:
-        async with db.begin_nested():  # savepoint — rollback only affects this block
-            log = AuditLog(
-                id=uuid.uuid4(),
-                tenant_id=uuid.UUID(tenant_id) if tenant_id else None,
-                user_id=uuid.UUID(user_id) if user_id else None,
-                user_email=user_email,
-                action=action,
-                resource_type=resource_type,
-                resource_id=resource_id,
-                details=details,
-            )
-            db.add(log)
-        await db.commit()  # persist the savepoint to the database
+        log = AuditLog(
+            id=uuid.uuid4(),
+            tenant_id=uuid.UUID(tenant_id) if tenant_id else None,
+            user_id=uuid.UUID(user_id) if user_id else None,
+            user_email=user_email,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            details=details,
+        )
+        db.add(log)
+        await db.commit()
     except Exception as exc:
         logger.warning("create_audit_log failed silently: %s", exc)

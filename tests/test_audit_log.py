@@ -5,13 +5,10 @@ from app.core.audit import create_audit_log
 
 @pytest.mark.asyncio
 async def test_create_audit_log_commits_session():
-    """create_audit_log must call db.commit() so the row actually persists."""
+    """create_audit_log must stage the log row and commit it."""
     mock_db = MagicMock()
     mock_db.commit = AsyncMock()
     mock_db.add = MagicMock()
-    # begin_nested must be a regular MagicMock so it returns the async CM directly
-    # (not a coroutine), allowing `async with db.begin_nested():` to work
-    mock_db.begin_nested = MagicMock(return_value=AsyncMock())
 
     await create_audit_log(
         mock_db,
@@ -22,6 +19,7 @@ async def test_create_audit_log_commits_session():
         resource_type="auth",
     )
 
+    mock_db.add.assert_called_once()
     mock_db.commit.assert_called_once()
 
 
@@ -29,7 +27,8 @@ async def test_create_audit_log_commits_session():
 async def test_create_audit_log_silent_on_db_error():
     """Exceptions must be swallowed — audit failure must never crash the request."""
     mock_db = MagicMock()
-    mock_db.begin_nested = MagicMock(side_effect=Exception("DB connection lost"))
+    mock_db.add = MagicMock(side_effect=Exception("DB write error"))
+    mock_db.commit = AsyncMock()
 
     await create_audit_log(
         mock_db,
@@ -39,3 +38,5 @@ async def test_create_audit_log_silent_on_db_error():
         action="user.login",
         resource_type="auth",
     )
+
+    mock_db.commit.assert_not_called()
