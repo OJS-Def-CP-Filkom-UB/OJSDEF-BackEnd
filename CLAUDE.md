@@ -53,7 +53,7 @@ app/
 │   ├── ojs_target.py          — OJSTarget (incl. trigger/probe/connection_mode fields)
 │   ├── scan_job.py
 │   ├── scan_finding.py
-│   ├── scan_schedule.py
+│   ├── scan_schedule.py       — Model ada, tapi Celery Beat auto-scan DEFERRED ke Fase 2
 │   ├── report.py
 │   ├── notification.py
 │   └── audit_log.py
@@ -73,10 +73,12 @@ app/
 │   ├── external_bot.py        — Offensive scanner (8 scanner modules)
 │   ├── scoring.py             — CVSS calc + PDF generation
 │   ├── notify.py              — Email + Telegram alerts
-│   └── tasks.py               — cleanup_stale_pending_jobs periodic task (setiap 5 menit)
+│   ├── tasks.py               — cleanup_stale_pending_jobs periodic task (setiap 5 menit)
+│   ├── utils.py               — Shared worker utilities
+│   └── diagnostics.py         — Diagnostic helpers untuk internal scan
 ├── scanners/
-│   ├── internal/              — Python-side analysis (config, plugins, rbac, file, content, db)
-│   └── external/              — Passive external scan (ssl, headers, cve, vuln_prober, etc.)
+│   ├── internal/              — Python-side analysis: config, plugins, rbac, file_integrity, content (5 modul; db_security DEFERRED Fase 2)
+│   └── external/              — Passive external scan: ssl, headers, endpoint, open_dir, cve, vuln_prober, fingerprinter, cookie_analyzer (8 modul)
 ├── services/
 │   ├── auth.py, crypto.py, targets.py, report.py
 ├── middleware/
@@ -85,7 +87,8 @@ app/
 └── migrations/versions/
     ├── 001_initial.py         — Schema awal
     ├── 002_plugin_connection_fields.py — Tambah trigger/probe/connection_mode/pending_scan ke ojs_targets
-    └── 003_audit_log_user_email_nullable_tenant.py — Tambah user_email, buat tenant_id nullable
+    ├── 003_audit_log_user_email_nullable_tenant.py — Tambah user_email, buat tenant_id nullable di audit_logs
+    └── 004_internal_scan_diagnostics.py — Tambah diagnostic_code/diagnostic_detail ke scan_jobs, force_heartbeat ke ojs_targets
 ```
 
 ## Tech Stack
@@ -130,6 +133,14 @@ app/
 | `probe_endpoint` | String | URL plugin `/ojsdef/probe` (test reachability) |
 | `connection_mode` | String | `direct` / `heartbeat` / `unknown` (default) |
 | `pending_scan_job_id` | UUID | Job menunggu trigger via heartbeat mode; dikosongkan setelah callback diterima |
+| `force_heartbeat` | Boolean | Override connection detection — paksa mode heartbeat |
+
+### ScanJob fields tambahan (dari migration 004)
+
+| Kolom | Tipe | Keterangan |
+|-------|------|-----------|
+| `diagnostic_code` | String(40) | Kode error singkat jika scan gagal (mis. `plugin_unreachable`, `hmac_error`) |
+| `diagnostic_detail` | Text | Pesan error detail untuk debugging |
 
 ## Plugin Integration Protocol
 
@@ -224,7 +235,7 @@ Scoring worker jalan setelah scan selesai. Temuan Critical otomatis trigger `not
 alembic upgrade head
 ```
 
-Migration 003 menambah kolom `user_email` dan membuat `tenant_id` nullable di tabel `audit_logs`.
+Migration terbaru (004): menambah `diagnostic_code`, `diagnostic_detail` di `scan_jobs`, dan `force_heartbeat` di `ojs_targets`.
 
 ### Celery Beat
 
