@@ -10,7 +10,7 @@ from app.schemas.admin import (
     CreateUserRequest, CreateUserResponse, PatchUserRequest,
     CreateTenantRequest, TenantResponse,
 )
-from app.services.auth import require_role, hash_password
+from app.services.auth import require_role, hash_password, get_current_user
 from app.core.audit import create_audit_log
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
@@ -85,6 +85,7 @@ async def list_users(db: AsyncSession = Depends(get_db)):
 async def patch_user(
     user_id: uuid.UUID,
     body: PatchUserRequest,
+    current: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(User).where(User.id == user_id))
@@ -94,17 +95,34 @@ async def patch_user(
     for field, val in body.model_dump(exclude_none=True).items():
         setattr(user, field, val)
     await db.commit()
+    await create_audit_log(
+        db, user_id=current.get("sub"), user_email=current.get("email", "unknown"),
+        tenant_id=current.get("tenant_id"), action="user.updated",
+        resource_type="user", resource_id=str(user_id),
+        details=body.model_dump(exclude_none=True),
+    )
     return {"id": str(user.id), "is_active": user.is_active, "role": user.role}
 
 
 @router.delete("/users/{user_id}", status_code=204, dependencies=[_saas])
-async def delete_user(user_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def delete_user(
+    user_id: uuid.UUID,
+    current: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(404, "User tidak ditemukan")
+    user_email_snapshot = user.email
     await db.delete(user)
     await db.commit()
+    await create_audit_log(
+        db, user_id=current.get("sub"), user_email=current.get("email", "unknown"),
+        tenant_id=current.get("tenant_id"), action="user.deleted",
+        resource_type="user", resource_id=str(user_id),
+        details={"email": user_email_snapshot},
+    )
 
 
 @router.post("/tenants", response_model=TenantResponse, status_code=201, dependencies=[_saas])
