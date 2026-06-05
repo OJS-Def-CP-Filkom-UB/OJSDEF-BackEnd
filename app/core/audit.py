@@ -31,5 +31,6 @@ async def create_audit_log(
                 details=details,
             )
             db.add(log)
+        await db.commit()  # persist the savepoint to the database
     except Exception as exc:
         logger.warning("create_audit_log failed silently: %s", exc)
