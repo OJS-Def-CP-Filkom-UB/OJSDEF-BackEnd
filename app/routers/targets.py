@@ -102,8 +102,15 @@ async def delete_target(
     target = result.scalar_one_or_none()
     if not target:
         raise HTTPException(404, "Target tidak ditemukan")
+    target_name, target_url = target.name, target.url
     await db.delete(target)
     await db.commit()
+    await create_audit_log(
+        db, user_id=current.get("sub"), user_email=current.get("email", "unknown"),
+        tenant_id=current.get("tenant_id"), action="target.deleted",
+        resource_type="target", resource_id=str(target_id),
+        details={"name": target_name, "url": target_url},
+    )
 
 
 @router.post("/{target_id}/verify", response_model=VerifyResponse)
@@ -194,4 +201,9 @@ async def regen_key(
     if not target:
         raise HTTPException(404, "Target tidak ditemukan")
     new_key = await regenerate_api_key(db, target)
+    await create_audit_log(
+        db, user_id=current.get("sub"), user_email=current.get("email", "unknown"),
+        tenant_id=current.get("tenant_id"), action="target.api_key_regenerated",
+        resource_type="target", resource_id=str(target_id),
+    )
     return {"api_key": new_key}
