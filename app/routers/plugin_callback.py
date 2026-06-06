@@ -67,7 +67,7 @@ async def _probe_plugin(
                 await session.commit()
         finally:
             await session.execute(text("SET app.current_tenant_id = ''"))
-            await session.execute(text("SET app.current_role = ''"))
+            await session.execute(text("SET app.user_role = ''"))
 
 
 @router.post("/heartbeat")
@@ -116,7 +116,7 @@ async def plugin_heartbeat(request: Request, bg: BackgroundTasks):
             await session.commit()
         finally:
             await session.execute(text("SET app.current_tenant_id = ''"))
-            await session.execute(text("SET app.current_role = ''"))
+            await session.execute(text("SET app.user_role = ''"))
 
     challenge = payload.get("reachability_challenge")
     probe_ep = payload.get("probe_endpoint") or target.probe_endpoint
@@ -174,7 +174,7 @@ async def plugin_callback(request: Request):
             await session.commit()
         finally:
             await session.execute(text("SET app.current_tenant_id = ''"))
-            await session.execute(text("SET app.current_role = ''"))
+            await session.execute(text("SET app.user_role = ''"))
 
     celery_app.send_task(
         "app.workers.internal_bot.process_plugin_data_task",

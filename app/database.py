@@ -9,7 +9,7 @@ from app.config import get_settings
 
 settings = get_settings()
 
-# Runtime engine — menggunakan role ojsdef_app (non-owner, kena FORCE RLS)
+# Runtime engine — menggunakan role ojsdef_app (non-owner, kena RLS secara default)
 engine = create_async_engine(
     settings.database_url_app,
     echo=settings.environment == "development",
@@ -68,7 +68,7 @@ async def set_tenant_context(session: AsyncSession, tenant_id: str, role: str) -
     import uuid as _uuid
     _uuid.UUID(tenant_id)  # validasi format UUID — raise ValueError jika invalid
     await session.execute(text(f"SET app.current_tenant_id = '{tenant_id}'"))
-    await session.execute(text(f"SET app.current_role = '{role}'"))
+    await session.execute(text(f"SET app.user_role = '{role}'"))
 
 
 async def get_db(request: Request):
@@ -86,7 +86,7 @@ async def get_db(request: Request):
             yield session
         finally:
             await session.execute(text("SET app.current_tenant_id = ''"))
-            await session.execute(text("SET app.current_role = ''"))
+            await session.execute(text("SET app.user_role = ''"))
 
 
 async def get_auth_db():

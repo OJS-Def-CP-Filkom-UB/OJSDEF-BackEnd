@@ -45,7 +45,7 @@ def upgrade() -> None:
         op.execute(f"""
             CREATE POLICY tenant_isolation ON {table}
             USING (
-                current_setting('app.current_role', true) = 'saas_admin'
+                current_setting('app.user_role', true) = 'saas_admin'
                 OR tenant_id = current_setting('app.current_tenant_id', true)::uuid
             )
         """)
