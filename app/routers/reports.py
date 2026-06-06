@@ -11,6 +11,7 @@ from app.schemas.reports import ReportResponse
 from app.services.auth import get_current_user
 from app.core.audit import create_audit_log
 from app.config import get_settings
+from app.routers._tenant_helper import resolve_tenant_filter
 
 router = APIRouter(prefix="/api/v1/reports", tags=["reports"])
 settings = get_settings()
@@ -27,13 +28,15 @@ def _s3():
 
 @router.get("", response_model=list[ReportResponse])
 async def list_reports(
+    tenant_id: str | None = None,
     current: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tid = uuid.UUID(current["tenant_id"])
-    result = await db.execute(
-        select(Report).where(Report.tenant_id == tid).order_by(Report.created_at.desc())
-    )
+    tid = resolve_tenant_filter(current, tenant_id)
+    q = select(Report).order_by(Report.created_at.desc())
+    if tid is not None:
+        q = q.where(Report.tenant_id == tid)
+    result = await db.execute(q)
     return [
         ReportResponse(id=str(r.id), job_id=str(r.job_id), format=r.format,
                        file_size_bytes=r.file_size_bytes, created_at=r.created_at)
@@ -47,13 +50,10 @@ async def download_pdf(
     current: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(Report).where(
-            Report.id == report_id,
-            Report.format == "pdf",
-            Report.tenant_id == uuid.UUID(current["tenant_id"]),
-        )
-    )
+    q = select(Report).where(Report.id == report_id, Report.format == "pdf")
+    if current["role"] != "saas_admin":
+        q = q.where(Report.tenant_id == uuid.UUID(current["tenant_id"]))
+    result = await db.execute(q)
     report = result.scalar_one_or_none()
     if not report or not report.storage_path:
         raise HTTPException(404, "Laporan PDF tidak ditemukan")
@@ -80,12 +80,10 @@ async def download_json(
     current: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(Report).where(
-            Report.id == report_id,
-            Report.tenant_id == uuid.UUID(current["tenant_id"]),
-        )
-    )
+    q = select(Report).where(Report.id == report_id)
+    if current["role"] != "saas_admin":
+        q = q.where(Report.tenant_id == uuid.UUID(current["tenant_id"]))
+    result = await db.execute(q)
     report = result.scalar_one_or_none()
     if not report:
         raise HTTPException(404, "Laporan tidak ditemukan")
