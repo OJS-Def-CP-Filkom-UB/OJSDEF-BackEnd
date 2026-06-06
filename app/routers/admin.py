@@ -4,9 +4,9 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from app.database import get_db
-from app.models import User, Tenant
+from app.models import User, Tenant, OJSTarget, ScanJob
 from app.schemas.admin import (
     CreateUserRequest, CreateUserResponse, PatchUserRequest,
     CreateTenantRequest, TenantResponse,
@@ -158,3 +158,43 @@ async def list_tenants(db: AsyncSession = Depends(get_db)):
         {"id": str(t.id), "name": t.name, "slug": t.slug, "is_active": t.is_active}
         for t in result.scalars()
     ]
+
+
+@router.get("/stats", dependencies=[_saas])
+async def platform_overview_stats(db: AsyncSession = Depends(get_db)):
+    """Aggregated stats lintas semua tenant untuk saas_admin dashboard."""
+    from app.models import Tenant
+    now = datetime.now(timezone.utc)
+    threshold_15m = now - timedelta(minutes=15)
+    month_ago = now - timedelta(days=30)
+
+    total_tenants = (await db.execute(
+        select(func.count()).select_from(Tenant)
+    )).scalar() or 0
+
+    total_targets = (await db.execute(
+        select(func.count()).select_from(OJSTarget)
+    )).scalar() or 0
+
+    active_targets = (await db.execute(
+        select(func.count()).select_from(OJSTarget)
+        .where(OJSTarget.plugin_last_seen >= threshold_15m)
+    )).scalar() or 0
+
+    scans_30d = (await db.execute(
+        select(func.count()).select_from(ScanJob)
+        .where(ScanJob.created_at >= month_ago)
+    )).scalar() or 0
+
+    scans_with_critical = (await db.execute(
+        select(func.count()).select_from(ScanJob)
+        .where(ScanJob.critical_count > 0, ScanJob.status == "completed")
+    )).scalar() or 0
+
+    return {
+        "total_tenants": total_tenants,
+        "total_targets": total_targets,
+        "active_targets": active_targets,
+        "scans_last_30_days": scans_30d,
+        "scans_with_critical_findings": scans_with_critical,
+    }
