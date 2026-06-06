@@ -249,6 +249,9 @@ nano .env
 ```env
 # ─── Database ───────────────────────────────────────────────
 DATABASE_URL=postgresql+asyncpg://ojsdef:GANTI_PASS_KUAT@postgres:5432/ojsdef
+# Role non-owner untuk runtime (kena FORCE ROW LEVEL SECURITY)
+# Buat dulu di psql: CREATE ROLE ojsdef_app WITH LOGIN PASSWORD '...';
+DATABASE_URL_APP=postgresql+asyncpg://ojsdef_app:GANTI_PASS_APP_KUAT@postgres:5432/ojsdef
 
 # ─── Redis ──────────────────────────────────────────────────
 REDIS_URL=redis://redis:6379/0
@@ -593,7 +596,17 @@ docker compose logs fastapi --tail=50
 ```bash
 cd /opt/ojsdef/backend
 
-# Jalankan semua migration (termasuk 003 untuk audit_logs)
+# PENTING: Buat role ojsdef_app SEBELUM menjalankan alembic upgrade head
+# (migration 006 akan mencoba CREATE ROLE, tapi jika user DB bukan superuser akan gagal)
+# Jalankan manual dulu sebagai superuser:
+docker compose exec postgres psql -U postgres -d ojsdef -c "
+  CREATE ROLE ojsdef_app WITH LOGIN PASSWORD 'GANTI_PASSWORD_APP_KUAT';
+  GRANT USAGE ON SCHEMA public TO ojsdef_app;
+  GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ojsdef_app;
+  GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ojsdef_app;
+"
+
+# Jalankan semua migration
 docker compose exec fastapi alembic upgrade head
 
 # Verifikasi tabel terbuat
@@ -603,6 +616,8 @@ docker compose exec postgres psql -U ojsdef -d ojsdef -c "\dt"
 docker compose exec fastapi python scripts/seed.py
 ```
 
+> **Catatan password ojsdef_app:** Password yang dipakai di `CREATE ROLE` di atas harus sama persis dengan nilai `GANTI_PASS_APP_KUAT` di `DATABASE_URL_APP` pada file `.env`.
+
 ### Daftar Migration
 
 | Versi | File | Perubahan |
@@ -610,8 +625,11 @@ docker compose exec fastapi python scripts/seed.py
 | 001 | `001_initial.py` | Schema awal semua tabel |
 | 002 | `002_plugin_connection_fields.py` | `trigger_endpoint`, `probe_endpoint`, `connection_mode`, `pending_scan_job_id` di `ojs_targets` |
 | 003 | `003_audit_log_user_email_nullable_tenant.py` | Kolom `user_email` di `audit_logs`; `tenant_id` jadi nullable; index pada `created_at`, `action`, `tenant_id` |
+| 004 | `004_internal_scan_diagnostics.py` | Kolom `diagnostic_code`, `diagnostic_detail` di `scan_jobs`; `force_heartbeat` di `ojs_targets` |
+| 005 | `005_telegram_notification.py` | Kolom `telegram_username`, `telegram_link_token`, `telegram_link_token_expires` di `users`; `job_id` nullable di `notifications` |
+| 006 | `006_rbac_tenancy_fix.py` | Buat role `ojsdef_app`; `FORCE ROW LEVEL SECURITY` pada 8 tabel tenant; update policy `tenant_isolation` dengan bypass untuk `saas_admin` |
 
-> **Upgrade dari versi sebelumnya:** `alembic upgrade head` aman dijalankan — migration 003 menambah kolom `user_email` (server default `'unknown'`) dan mengubah `tenant_id` nullable tanpa menghapus data existing.
+> **Upgrade dari versi sebelumnya:** `alembic upgrade head` aman dijalankan. Migration 005 menambah kolom Telegram (nullable) dan migration 006 mengaktifkan FORCE RLS — keduanya tidak menghapus data existing. Pastikan role `ojsdef_app` sudah dibuat dan `DATABASE_URL_APP` sudah diisi di `.env` sebelum restart container FastAPI.
 
 ---
 
@@ -929,26 +947,47 @@ curl https://api.domainmu.com/health
 ```bash
 cd /opt/ojsdef/backend
 
-# 1. Backup database DULU
+# 1. Backup database DULU (WAJIB sebelum migrasi apapun)
+mkdir -p /opt/ojsdef/backup
 docker compose exec -T postgres pg_dump -U ojsdef ojsdef > \
   /opt/ojsdef/backup/pre_migration_$(date +%Y%m%d_%H%M%S).sql
+echo "Backup selesai: $(ls -lh /opt/ojsdef/backup/pre_migration_*.sql | tail -1)"
 
 # 2. Pull kode terbaru
 git pull origin main
 
-# 3. Rebuild image
+# 3. Jika update ini menyertakan migration 006 (RBAC fix):
+#    a. Buat role ojsdef_app jika belum ada
+docker compose exec postgres psql -U postgres -d ojsdef -c "
+  DO \$\$
+  BEGIN
+    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'ojsdef_app') THEN
+      CREATE ROLE ojsdef_app WITH LOGIN PASSWORD 'GANTI_PASSWORD_APP_KUAT';
+    END IF;
+  END
+  \$\$;
+  GRANT USAGE ON SCHEMA public TO ojsdef_app;
+  GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ojsdef_app;
+  GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ojsdef_app;
+"
+#    b. Pastikan DATABASE_URL_APP sudah ada di .env
+grep -q DATABASE_URL_APP .env || echo "DATABASE_URL_APP=postgresql+asyncpg://ojsdef_app:GANTI_PASSWORD_APP_KUAT@postgres:5432/ojsdef" >> .env
+#    c. Edit .env untuk set password yang benar (jika baru ditambahkan)
+#    nano .env
+
+# 4. Rebuild image
 docker compose build
 
-# 4. Stop workers (cegah task baru masuk saat migrasi)
+# 5. Stop workers (cegah task baru masuk saat migrasi)
 docker compose stop worker-internal worker-external worker-scoring worker-notify
 
-# 5. Jalankan migrasi
+# 6. Jalankan migrasi
 docker compose run --rm fastapi alembic upgrade head
 
-# 6. Start ulang semua service
+# 7. Start ulang semua service
 docker compose up -d
 
-# 7. Verifikasi
+# 8. Verifikasi
 docker compose logs fastapi --tail=30
 ```
 
@@ -1168,11 +1207,19 @@ Role yang dikenali sistem: `admin_ojs` | `saas_admin` | `viewer`. Role `it_admin
 
 Sebelum declare production-ready, pastikan semua item ini terpenuhi:
 
+**Environment & Secrets:**
 - [ ] `.env` terisi lengkap dengan secret yang kuat (bukan nilai dari `.env.example`)
+- [ ] `DATABASE_URL_APP` sudah diisi di `.env` dengan password yang sama dengan role `ojsdef_app` di PostgreSQL
 - [ ] `chmod 600 .env` sudah dijalankan
-- [ ] `docker compose ps` — semua container berstatus `Up` atau `Up (healthy)`
-- [ ] `alembic upgrade head` berhasil, semua tabel terbuat
+
+**Database & Migrasi:**
+- [ ] Role `ojsdef_app` sudah dibuat di PostgreSQL dengan password kuat
+- [ ] `alembic upgrade head` berhasil — cek `alembic current` menampilkan revision `006`
+- [ ] `FORCE ROW LEVEL SECURITY` aktif — verifikasi: `docker compose exec postgres psql -U ojsdef -d ojsdef -c "SELECT tablename, rowsecurity, forcerls FROM pg_tables WHERE schemaname='public' AND rowsecurity=true;"`
 - [ ] `scripts/seed.py` berhasil, admin user bisa login
+
+**Infrastruktur:**
+- [ ] `docker compose ps` — semua container berstatus `Up` atau `Up (healthy)`
 - [ ] `curl https://api.domainmu.com/health` mengembalikan `{"status":"ok"}`
 - [ ] Cloudflare DNS record `api` dan `flower` berstatus **Proxied** (orange cloud)
 - [ ] Cloudflare SSL/TLS mode: **Flexible** (atau Full jika pakai cert di VPS)
@@ -1180,8 +1227,12 @@ Sebelum declare production-ready, pastikan semua item ini terpenuhi:
 - [ ] Cache Rule bypass untuk `/plugin/v1/*` sudah dibuat
 - [ ] Firewall UFW hanya membuka port 22, 80, 443
 - [ ] Cron job backup database aktif (`sudo crontab -l`)
+
+**Fungsionalitas:**
 - [ ] Flower dashboard accessible di `https://flower.domainmu.com`
+- [ ] Login sebagai `admin_ojs` tenant A — hanya lihat data tenant A (tidak ada data tenant lain)
+- [ ] Login sebagai `admin_ojs` tenant B — hanya lihat data tenant B
+- [ ] Login sebagai `saas_admin` — bisa lihat semua data cross-tenant
 - [ ] Test scan end-to-end berhasil (job sampai status "completed")
 - [ ] Email notifikasi berfungsi
 - [ ] Celery beat service berjalan (`docker compose ps celery-beat`)
-- [ ] `alembic upgrade head` — migration 003 sudah dijalankan (cek kolom `user_email` di tabel `audit_logs`)
