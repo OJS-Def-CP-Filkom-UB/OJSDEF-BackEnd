@@ -6,6 +6,7 @@ from app.services.auth import decode_access_token
 WHITELIST = {
     "/api/v1/auth/login", "/api/v1/auth/refresh",
     "/health", "/docs", "/openapi.json", "/redoc",
+    "/telegram/webhook",
 }
 
 

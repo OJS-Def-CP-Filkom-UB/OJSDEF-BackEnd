@@ -72,6 +72,8 @@ async def create_user(body: CreateUserRequest, db: AsyncSession = Depends(get_db
         resource_type="user", resource_id=str(user.id),
         details={"email": user.email, "role": user.role},
     )
+    if not settings.telegram_bot_username:
+        raise HTTPException(503, "Telegram bot belum dikonfigurasi")
     deeplink = f"https://t.me/{settings.telegram_bot_username}?start={link_token}"
     return CreateUserResponse(
         id=str(user.id), email=user.email, full_name=user.full_name,

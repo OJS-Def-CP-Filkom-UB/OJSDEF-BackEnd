@@ -18,7 +18,9 @@ async def _bot_reply(chat_id: int, text: str) -> None:
     url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
     try:
         async with httpx.AsyncClient(timeout=10) as c:
-            await c.post(url, json={"chat_id": chat_id, "text": text})
+            r = await c.post(url, json={"chat_id": chat_id, "text": text})
+            if r.status_code != 200:
+                logger.warning("bot_reply HTTP %s chat_id=%s body=%s", r.status_code, chat_id, r.text[:200])
     except Exception as e:
         logger.warning("bot_reply failed chat_id=%s: %s", chat_id, e)
 
@@ -81,8 +83,11 @@ async def telegram_webhook(
         await session.commit()
 
         # Defer import to avoid circular import at module load
-        from app.workers.notify import send_welcome
-        send_welcome.apply_async((str(user.id),), queue="notifications")
+        try:
+            from app.workers.notify import send_welcome
+            send_welcome.apply_async((str(user.id),), queue="notifications")
+        except Exception as e:
+            logger.warning("send_welcome enqueue failed (non-fatal): %s", e)
 
         await _bot_reply(chat_id, (
             "✅ Akun berhasil terhubung ke OJSDef!\n\n"

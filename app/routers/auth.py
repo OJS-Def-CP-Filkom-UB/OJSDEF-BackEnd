@@ -166,6 +166,10 @@ async def get_telegram_link(
 ):
     result = await db.execute(select(User).where(User.id == current["sub"]))
     user = result.scalar_one()
+    if user.telegram_chat_id:
+        raise HTTPException(409, "Akun Telegram sudah terhubung")
+    if not settings.telegram_bot_username:
+        raise HTTPException(503, "Telegram bot belum dikonfigurasi")
     link_token = secrets.token_urlsafe(32)
     link_expires = datetime.now(timezone.utc) + timedelta(days=7)
     user.telegram_link_token = link_token
