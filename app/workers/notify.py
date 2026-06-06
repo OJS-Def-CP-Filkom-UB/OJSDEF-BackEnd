@@ -3,13 +3,13 @@ import uuid
 import os
 from datetime import datetime, timezone, timedelta
 from jinja2 import Environment, FileSystemLoader
-from sqlalchemy import select
+from sqlalchemy import select, or_
 import httpx
 import aiosmtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from app.celery_app import celery_app
-from app.database import AsyncSessionLocal
+from app.database import make_worker_session
 from app.models import ScanJob, ScanFinding, OJSTarget, User, Notification
 from app.config import get_settings
 
@@ -57,7 +57,7 @@ async def _telegram(chat_id: str, text: str) -> bool:
 # ── Welcome ────────────────────────────────────────────────────────────────────
 
 async def _run_send_welcome(user_id: str):
-    async with AsyncSessionLocal() as session:
+    async with make_worker_session() as session:
         result = await session.execute(select(User).where(User.id == user_id))
         user = result.scalar_one_or_none()
         if not user or not user.telegram_chat_id:
@@ -91,21 +91,27 @@ def send_welcome(self, user_id: str):
 # ── Scan Completed ─────────────────────────────────────────────────────────────
 
 async def _run_send_scan_completed(job_id: str):
-    async with AsyncSessionLocal() as session:
-        job = (await session.execute(select(ScanJob).where(ScanJob.id == job_id))).scalar_one()
+    async with make_worker_session() as session:
+        job = (await session.execute(select(ScanJob).where(ScanJob.id == job_id))).scalar_one_or_none()
+        if not job:
+            return
         if job.status != "completed":
             return
 
-        target = (await session.execute(
+        target_result = (await session.execute(
             select(OJSTarget).where(OJSTarget.id == job.target_id)
-        )).scalar_one()
+        )).scalar_one_or_none()
+        if not target_result:
+            return
 
-        users = [
-            u for u in (await session.execute(
-                select(User).where(User.tenant_id == job.tenant_id, User.is_active == True)
-            )).scalars()
-            if u.notif_telegram and u.telegram_chat_id
-        ]
+        users = (await session.execute(
+            select(User).where(
+                User.tenant_id == job.tenant_id,
+                User.is_active == True,
+                User.notif_telegram == True,
+                User.telegram_chat_id.isnot(None),
+            )
+        )).scalars().all()
 
         if not users:
             return
@@ -116,7 +122,7 @@ async def _run_send_scan_completed(job_id: str):
         created_wib = job.created_at.astimezone(wib).strftime("%d/%m/%Y %H:%M")
 
         text = (
-            f"✅ Scan Selesai — {target.name}\n\n"
+            f"✅ Scan Selesai — {target_result.name}\n\n"
             f"Jenis Scan : {scan_type_label}\n"
             f"Skor Risiko: {job.overall_score}/100 — {risk_label}\n"
             f"Waktu Scan : {created_wib} WIB\n\n"
@@ -147,32 +153,40 @@ def send_scan_completed(self, job_id: str):
 # ── Critical Alert ─────────────────────────────────────────────────────────────
 
 async def _run_critical_alert(job_id: str, finding_ids: list[str]):
-    async with AsyncSessionLocal() as session:
-        job = (await session.execute(select(ScanJob).where(ScanJob.id == job_id))).scalar_one()
+    async with make_worker_session() as session:
+        job = (await session.execute(select(ScanJob).where(ScanJob.id == job_id))).scalar_one_or_none()
+        if not job:
+            return
         if job.status != "completed":
             return
-        target = (await session.execute(
+        target_result = (await session.execute(
             select(OJSTarget).where(OJSTarget.id == job.target_id)
-        )).scalar_one()
+        )).scalar_one_or_none()
+        if not target_result:
+            return
         findings = (await session.execute(
             select(ScanFinding).where(
                 ScanFinding.id.in_(finding_ids),
                 ScanFinding.tenant_id == job.tenant_id,
             )
         )).scalars().all()
-        users = [
-            u for u in (await session.execute(
-                select(User).where(User.tenant_id == job.tenant_id, User.is_active == True)
-            )).scalars()
-            if u.notif_email or u.notif_telegram
-        ]
+        users = (await session.execute(
+            select(User).where(
+                User.tenant_id == job.tenant_id,
+                User.is_active == True,
+                or_(
+                    User.notif_email == True,
+                    User.notif_telegram == True,
+                ),
+            )
+        )).scalars().all()
 
         if not users:
             return
 
-        subject = f"[OJSDef] Ancaman Kritis Terdeteksi — {target.name}"
+        subject = f"[OJSDef] Ancaman Kritis Terdeteksi — {target_result.name}"
         html_body = _jinja.get_template("email_critical.html").render(
-            target_name=target.name, target_url=target.url,
+            target_name=target_result.name, target_url=target_result.url,
             overall_score=job.overall_score, risk_level=job.risk_level,
             findings=findings,
             dashboard_url=settings.allowed_origins_list[0] + "/dashboard",
@@ -183,8 +197,8 @@ async def _run_critical_alert(job_id: str, finding_ids: list[str]):
 
         tg_text = (
             "🚨 ANCAMAN KRITIS TERDETEKSI\n\n"
-            f"Target: {target.name}\n"
-            f"URL: {target.url}\n"
+            f"Target: {target_result.name}\n"
+            f"URL: {target_result.url}\n"
             f"Skor Risiko: {job.overall_score}/100 — KRITIS\n\n"
             f"Temuan Kritis ({count} temuan):\n"
             f"{findings_list}\n\n"
