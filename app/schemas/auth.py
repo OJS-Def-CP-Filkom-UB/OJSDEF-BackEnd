@@ -41,3 +41,4 @@ class UserResponse(BaseModel):
     notif_email: bool
     notif_telegram: bool
     telegram_chat_id: str | None
+    telegram_username: str | None = None

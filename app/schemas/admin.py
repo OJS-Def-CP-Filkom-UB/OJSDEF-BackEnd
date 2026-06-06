@@ -8,11 +8,13 @@ class CreateUserRequest(BaseModel):
     role: UserRole
     tenant_id: str | None = None
     new_tenant_name: str | None = None
+    telegram_username: str | None = None
 
 
 class CreateUserResponse(UserResponse):
     """Response untuk POST /admin/users — temp_password hanya muncul sekali."""
     temp_password: str
+    telegram_bot_deeplink: str
 
 
 class PatchUserRequest(BaseModel):

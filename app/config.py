@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     smtp_from: str = "noreply@ojsdef.com"
 
     telegram_bot_token: str = ""
+    telegram_webhook_secret: str = ""
+    telegram_bot_username: str = ""
+    frontend_base_url: str = "http://localhost:3000"
     cve_api_key: str = ""
     sentry_dsn: str = ""
 

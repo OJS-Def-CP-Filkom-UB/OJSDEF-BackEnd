@@ -107,6 +107,7 @@ async def me(
         role=user.role, must_change_password=user.must_change_password,
         notif_email=user.notif_email, notif_telegram=user.notif_telegram,
         telegram_chat_id=user.telegram_chat_id,
+        telegram_username=user.telegram_username,
     )
 
 
@@ -127,6 +128,7 @@ async def update_me(
         role=user.role, must_change_password=user.must_change_password,
         notif_email=user.notif_email, notif_telegram=user.notif_telegram,
         telegram_chat_id=user.telegram_chat_id,
+        telegram_username=user.telegram_username,
     )
 
 

@@ -1,5 +1,6 @@
 import uuid
-from sqlalchemy import String, Boolean, ForeignKey
+from datetime import datetime
+from sqlalchemy import String, Boolean, ForeignKey, DateTime
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from app.models.base import Base, TimestampMixin
@@ -19,3 +20,6 @@ class User(Base, TimestampMixin):
     notif_email: Mapped[bool] = mapped_column(Boolean, default=True)
     notif_telegram: Mapped[bool] = mapped_column(Boolean, default=False)
     telegram_chat_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    telegram_username: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    telegram_link_token: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
+    telegram_link_token_expires: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
