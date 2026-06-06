@@ -8,7 +8,7 @@ import uuid
 from passlib.context import CryptContext
 from sqlalchemy import select
 from app.config import get_settings
-from app.database import AsyncSessionLocal
+from app.database import OwnerSessionLocal
 from app.models import Tenant, User
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -16,7 +16,7 @@ settings = get_settings()
 
 
 async def seed() -> None:
-    async with AsyncSessionLocal() as session:
+    async with OwnerSessionLocal() as session:
         # Tenant
         row = await session.execute(select(Tenant).where(Tenant.slug == "default"))
         tenant = row.scalar_one_or_none()
