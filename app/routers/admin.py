@@ -191,10 +191,15 @@ async def platform_overview_stats(db: AsyncSession = Depends(get_db)):
         .where(ScanJob.critical_count > 0, ScanJob.status == "completed")
     )).scalar() or 0
 
+    total_users = (await db.execute(
+        select(func.count()).select_from(User)
+    )).scalar() or 0
+
     return {
         "total_tenants": total_tenants,
         "total_targets": total_targets,
         "active_targets": active_targets,
         "scans_last_30_days": scans_30d,
         "scans_with_critical_findings": scans_with_critical,
+        "total_users": total_users,
     }
