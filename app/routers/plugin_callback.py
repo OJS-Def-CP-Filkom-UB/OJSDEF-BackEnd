@@ -8,10 +8,10 @@ from datetime import datetime, timezone
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Request, HTTPException
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.celery_app import celery_app
-from app.database import AsyncSessionLocal
+from app.database import AsyncSessionLocal, set_tenant_context
 from app.models import OJSTarget, ScanJob
 from app.services.crypto import decrypt_api_key
 
@@ -34,10 +34,14 @@ def _sign_for_plugin(api_key: str, body: bytes) -> dict:
     }
 
 
-async def _probe_plugin(probe_endpoint: str, api_key: str, challenge: str, target_id: str) -> None:
-    """Attempt to probe plugin's /probe endpoint to determine connection mode.
-    Updates connection_mode to 'direct' on success, 'heartbeat' on failure.
-    """
+async def _probe_plugin(
+    probe_endpoint: str,
+    api_key: str,
+    challenge: str,
+    target_id: str,
+    tenant_id: str,
+) -> None:
+    """Attempt to probe plugin's /probe endpoint to determine connection mode."""
     body = json.dumps({"challenge": challenge}).encode()
     headers = _sign_for_plugin(api_key, body)
     try:
@@ -52,25 +56,26 @@ async def _probe_plugin(probe_endpoint: str, api_key: str, challenge: str, targe
         mode = "heartbeat"
 
     async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(OJSTarget).where(OJSTarget.id == target_id)
-        )
-        t = result.scalar_one_or_none()
-        if t:
-            t.connection_mode = mode
-            await session.commit()
+        await set_tenant_context(session, tenant_id, "plugin")
+        try:
+            result = await session.execute(
+                select(OJSTarget).where(OJSTarget.id == target_id)
+            )
+            t = result.scalar_one_or_none()
+            if t:
+                t.connection_mode = mode
+                await session.commit()
+        finally:
+            await session.execute(text("SET app.current_tenant_id = ''"))
+            await session.execute(text("SET app.current_role = ''"))
 
 
 @router.post("/heartbeat")
 async def plugin_heartbeat(request: Request, bg: BackgroundTasks):
-    """Receive periodic heartbeat from the OJSDef PHP plugin.
-
-    Plugin sends every 5 minutes with target metadata and optional
-    reachability_challenge for connection-mode auto-detection.
-    Response may include scan_requested if a job is pending in heartbeat mode.
-    """
+    """Receive periodic heartbeat from the OJSDef PHP plugin."""
     target: OJSTarget = request.state.plugin_target
     body: bytes = request.state.plugin_body
+    tenant_id = str(target.tenant_id)
 
     try:
         payload = json.loads(body)
@@ -78,46 +83,46 @@ async def plugin_heartbeat(request: Request, bg: BackgroundTasks):
         raise HTTPException(400, "Invalid JSON")
 
     async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(OJSTarget).where(OJSTarget.id == target.id)
-        )
-        t = result.scalar_one()
-
-        t.plugin_last_seen = datetime.now(timezone.utc)
-        if payload.get("ojs_version"):
-            t.ojs_version = payload["ojs_version"]
-
-        # Store plugin endpoints from heartbeat payload
-        if payload.get("trigger_endpoint"):
-            t.trigger_endpoint = payload["trigger_endpoint"]
-        if payload.get("probe_endpoint"):
-            t.probe_endpoint = payload["probe_endpoint"]
-
-        # If plugin reports mode already known, trust it
-        if payload.get("connection_mode") in ("direct", "heartbeat"):
-            t.connection_mode = payload["connection_mode"]
-
-        # Check for pending heartbeat-mode scan
-        pending_job_id = t.pending_scan_job_id
-        pending_job = None
-        if pending_job_id:
-            job_result = await session.execute(
-                select(ScanJob).where(ScanJob.id == pending_job_id, ScanJob.status == "running")
+        await set_tenant_context(session, tenant_id, "plugin")
+        try:
+            result = await session.execute(
+                select(OJSTarget).where(OJSTarget.id == target.id)
             )
-            pending_job = job_result.scalar_one_or_none()
-            if not pending_job:
-                # Job no longer active — clear stale pending
-                t.pending_scan_job_id = None
-                pending_job_id = None
+            t = result.scalar_one()
 
-        await session.commit()
+            t.plugin_last_seen = datetime.now(timezone.utc)
+            if payload.get("ojs_version"):
+                t.ojs_version = payload["ojs_version"]
+            if payload.get("trigger_endpoint"):
+                t.trigger_endpoint = payload["trigger_endpoint"]
+            if payload.get("probe_endpoint"):
+                t.probe_endpoint = payload["probe_endpoint"]
+            if payload.get("connection_mode") in ("direct", "heartbeat"):
+                t.connection_mode = payload["connection_mode"]
 
-    # Schedule probe in background if plugin sends a reachability_challenge
+            pending_job_id = t.pending_scan_job_id
+            pending_job = None
+            if pending_job_id:
+                job_result = await session.execute(
+                    select(ScanJob).where(
+                        ScanJob.id == pending_job_id, ScanJob.status == "running"
+                    )
+                )
+                pending_job = job_result.scalar_one_or_none()
+                if not pending_job:
+                    t.pending_scan_job_id = None
+                    pending_job_id = None
+
+            await session.commit()
+        finally:
+            await session.execute(text("SET app.current_tenant_id = ''"))
+            await session.execute(text("SET app.current_role = ''"))
+
     challenge = payload.get("reachability_challenge")
     probe_ep = payload.get("probe_endpoint") or target.probe_endpoint
     if challenge and probe_ep and target.plugin_api_key_encrypted:
         api_key = decrypt_api_key(target.plugin_api_key_encrypted)
-        bg.add_task(_probe_plugin, probe_ep, api_key, challenge, str(target.id))
+        bg.add_task(_probe_plugin, probe_ep, api_key, challenge, str(target.id), tenant_id)
 
     response: dict = {"status": "ok"}
     if pending_job:
@@ -133,6 +138,7 @@ async def plugin_callback(request: Request):
     """Receive audit_data from the OJSDef PHP plugin after a scan completes."""
     target: OJSTarget = request.state.plugin_target
     body: bytes = request.state.plugin_body
+    tenant_id = str(target.tenant_id)
 
     try:
         payload = json.loads(body)
@@ -148,21 +154,27 @@ async def plugin_callback(request: Request):
         raise HTTPException(400, "job_id required")
 
     async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(ScanJob).where(ScanJob.id == job_id, ScanJob.status == "running")
-        )
-        job = result.scalar_one_or_none()
-        if not job:
-            raise HTTPException(404, "Scan job tidak ditemukan atau tidak dalam status running")
+        await set_tenant_context(session, tenant_id, "plugin")
+        try:
+            result = await session.execute(
+                select(ScanJob).where(ScanJob.id == job_id, ScanJob.status == "running")
+            )
+            job = result.scalar_one_or_none()
+            if not job:
+                raise HTTPException(
+                    404, "Scan job tidak ditemukan atau tidak dalam status running"
+                )
 
-        # Clear pending heartbeat-mode job now that data arrived
-        t_result = await session.execute(
-            select(OJSTarget).where(OJSTarget.id == target.id)
-        )
-        t = t_result.scalar_one()
-        if t.pending_scan_job_id == job.id:
-            t.pending_scan_job_id = None
-        await session.commit()
+            t_result = await session.execute(
+                select(OJSTarget).where(OJSTarget.id == target.id)
+            )
+            t = t_result.scalar_one()
+            if t.pending_scan_job_id == job.id:
+                t.pending_scan_job_id = None
+            await session.commit()
+        finally:
+            await session.execute(text("SET app.current_tenant_id = ''"))
+            await session.execute(text("SET app.current_role = ''"))
 
     celery_app.send_task(
         "app.workers.internal_bot.process_plugin_data_task",
@@ -174,24 +186,14 @@ async def plugin_callback(request: Request):
 
 @router.get("/checksums")
 async def get_checksums(request: Request, version: str = ""):
-    """Return official SHA-256 checksums for core OJS files of a given version.
-    Used by FileIntegrityChecker on the plugin to detect tampered files.
-    Plugin caches this for 7 days (CACHE_TTL = 604800).
-    """
+    """Return official SHA-256 checksums for core OJS files of a given version."""
     target: OJSTarget = request.state.plugin_target  # noqa: F841 — auth verified by middleware
 
     if not version:
         raise HTTPException(400, "version parameter required")
 
-    # Normalize version string for lookup: "3.3.0-17" → "3_3_0"
     norm = version.replace(".", "_").replace("-", "_")
 
-    # Checksums untuk file core OJS per versi (path relatif → SHA-256 resmi dari PKP GitHub).
-    # Cara update hashes:
-    #   curl -sL https://raw.githubusercontent.com/pkp/ojs/3_4_0-7/index.php | sha256sum
-    #   curl -sL https://raw.githubusercontent.com/pkp/ojs/3_4_0-7/config.TEMPLATE.inc.php | sha256sum
-    #   curl -sL https://raw.githubusercontent.com/pkp/ojs/3_3_0-17/index.php | sha256sum
-    #   curl -sL https://raw.githubusercontent.com/pkp/ojs/3_3_0-17/config.TEMPLATE.inc.php | sha256sum
     CHECKSUMS: dict[str, dict[str, str]] = {
         "3_3_0": {
             "index.php":               "376e1a51db860abaf952b0d4dcce48b7809a58d785648d30d2d38167672b13a2",
@@ -203,7 +205,6 @@ async def get_checksums(request: Request, version: str = ""):
         },
     }
 
-    # Exact match first, then prefix match (e.g. "3.3.0-17" → key "3_3_0")
     checksums = CHECKSUMS.get(norm)
     if not checksums:
         for key in CHECKSUMS:

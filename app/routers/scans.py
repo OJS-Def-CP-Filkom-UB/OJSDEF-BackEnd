@@ -57,8 +57,12 @@ async def start_scan(
     current: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    tid = uuid.UUID(current["tenant_id"])
     result = await db.execute(
-        select(OJSTarget).where(OJSTarget.id == body.target_id)
+        select(OJSTarget).where(
+            OJSTarget.id == body.target_id,
+            OJSTarget.tenant_id == tid,
+        )
     )
     target = result.scalar_one_or_none()
     if not target:
@@ -68,7 +72,7 @@ async def start_scan(
 
     job = ScanJob(
         id=uuid.uuid4(),
-        tenant_id=uuid.UUID(current["tenant_id"]),
+        tenant_id=tid,
         target_id=target.id,
         scan_type=body.scan_type,
         status="running",
@@ -82,7 +86,6 @@ async def start_scan(
     target_id = str(target.id)
     target_url = target.url
 
-    # Inisialisasi Redis progress sebelum fire tasks
     r = aioredis.from_url(settings.redis_url, decode_responses=True)
     await r.setex(f"scan_progress:{job_id}", 3600, json.dumps({
         "scan_type": body.scan_type,
@@ -91,7 +94,6 @@ async def start_scan(
     }))
     await r.aclose()
 
-    # Fire tasks independen — scoring dikoordinasi oleh _try_trigger_scoring via Redis
     if body.scan_type in ("internal", "full"):
         celery_app.send_task(
             "app.workers.internal_bot.internal_scan_task",
@@ -120,7 +122,13 @@ async def list_scans(
     current: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    q = select(ScanJob).order_by(ScanJob.created_at.desc()).limit(limit)
+    tid = uuid.UUID(current["tenant_id"])
+    q = (
+        select(ScanJob)
+        .where(ScanJob.tenant_id == tid)
+        .order_by(ScanJob.created_at.desc())
+        .limit(limit)
+    )
     if target_id:
         q = q.where(ScanJob.target_id == target_id)
     if status:
@@ -135,7 +143,12 @@ async def get_scan(
     current: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(ScanJob).where(ScanJob.id == job_id))
+    result = await db.execute(
+        select(ScanJob).where(
+            ScanJob.id == job_id,
+            ScanJob.tenant_id == uuid.UUID(current["tenant_id"]),
+        )
+    )
     job = result.scalar_one_or_none()
     if not job:
         raise HTTPException(404, "Scan tidak ditemukan")
@@ -152,6 +165,16 @@ async def get_findings(
     current: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # Verifikasi job milik tenant ini sebelum query findings
+    job_result = await db.execute(
+        select(ScanJob).where(
+            ScanJob.id == job_id,
+            ScanJob.tenant_id == uuid.UUID(current["tenant_id"]),
+        )
+    )
+    if not job_result.scalar_one_or_none():
+        raise HTTPException(404, "Scan tidak ditemukan")
+
     q = select(ScanFinding).where(ScanFinding.job_id == job_id)
     if severity:
         q = q.where(ScanFinding.severity == severity)
@@ -179,6 +202,16 @@ async def mark_false_positive(
     current: dict = Depends(require_role("admin_ojs", "saas_admin")),
     db: AsyncSession = Depends(get_db),
 ):
+    # Verifikasi job milik tenant ini
+    job_result = await db.execute(
+        select(ScanJob).where(
+            ScanJob.id == job_id,
+            ScanJob.tenant_id == uuid.UUID(current["tenant_id"]),
+        )
+    )
+    if not job_result.scalar_one_or_none():
+        raise HTTPException(404, "Scan tidak ditemukan")
+
     result = await db.execute(
         select(ScanFinding).where(ScanFinding.id == finding_id, ScanFinding.job_id == job_id)
     )

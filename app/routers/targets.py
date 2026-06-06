@@ -59,7 +59,10 @@ async def list_targets(
     current: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(OJSTarget))
+    tid = uuid.UUID(current["tenant_id"])
+    result = await db.execute(
+        select(OJSTarget).where(OJSTarget.tenant_id == tid)
+    )
     return [_to_response(t) for t in result.scalars()]
 
 
@@ -85,7 +88,12 @@ async def get_target(
     current: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(OJSTarget).where(OJSTarget.id == target_id))
+    result = await db.execute(
+        select(OJSTarget).where(
+            OJSTarget.id == target_id,
+            OJSTarget.tenant_id == uuid.UUID(current["tenant_id"]),
+        )
+    )
     target = result.scalar_one_or_none()
     if not target:
         raise HTTPException(404, "Target tidak ditemukan")
@@ -98,7 +106,12 @@ async def delete_target(
     current: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(OJSTarget).where(OJSTarget.id == target_id))
+    result = await db.execute(
+        select(OJSTarget).where(
+            OJSTarget.id == target_id,
+            OJSTarget.tenant_id == uuid.UUID(current["tenant_id"]),
+        )
+    )
     target = result.scalar_one_or_none()
     if not target:
         raise HTTPException(404, "Target tidak ditemukan")
@@ -119,7 +132,12 @@ async def verify_target(
     current: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(OJSTarget).where(OJSTarget.id == target_id))
+    result = await db.execute(
+        select(OJSTarget).where(
+            OJSTarget.id == target_id,
+            OJSTarget.tenant_id == uuid.UUID(current["tenant_id"]),
+        )
+    )
     target = result.scalar_one_or_none()
     if not target:
         raise HTTPException(404, "Target tidak ditemukan")
@@ -176,7 +194,12 @@ async def plugin_guide(
     current: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(OJSTarget).where(OJSTarget.id == target_id))
+    result = await db.execute(
+        select(OJSTarget).where(
+            OJSTarget.id == target_id,
+            OJSTarget.tenant_id == uuid.UUID(current["tenant_id"]),
+        )
+    )
     target = result.scalar_one_or_none()
     if not target:
         raise HTTPException(404, "Target tidak ditemukan")
@@ -196,7 +219,12 @@ async def regen_key(
     current: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(OJSTarget).where(OJSTarget.id == target_id))
+    result = await db.execute(
+        select(OJSTarget).where(
+            OJSTarget.id == target_id,
+            OJSTarget.tenant_id == uuid.UUID(current["tenant_id"]),
+        )
+    )
     target = result.scalar_one_or_none()
     if not target:
         raise HTTPException(404, "Target tidak ditemukan")

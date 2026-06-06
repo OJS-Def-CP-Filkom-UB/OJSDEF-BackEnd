@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from jose import JWTError
 import redis.asyncio as aioredis
-from app.database import get_db
+from app.database import get_db, get_auth_db
 from app.models import User
 from app.schemas.auth import (
     LoginRequest, TokenResponse, RefreshRequest,
@@ -26,7 +26,7 @@ settings = get_settings()
 @router.post("/login", response_model=TokenResponse)
 async def login(
     body: LoginRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_auth_db),
 ):
     user = await authenticate_user(db, body.email, body.password)
     if not user:
@@ -55,7 +55,7 @@ async def login(
 
 
 @router.post("/refresh", response_model=TokenResponse)
-async def refresh(body: RefreshRequest, db: AsyncSession = Depends(get_db)):
+async def refresh(body: RefreshRequest, db: AsyncSession = Depends(get_auth_db)):
     try:
         payload = decode_access_token(body.refresh_token)
     except JWTError:

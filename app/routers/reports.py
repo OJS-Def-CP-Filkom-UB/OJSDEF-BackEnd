@@ -30,7 +30,10 @@ async def list_reports(
     current: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Report).order_by(Report.created_at.desc()))
+    tid = uuid.UUID(current["tenant_id"])
+    result = await db.execute(
+        select(Report).where(Report.tenant_id == tid).order_by(Report.created_at.desc())
+    )
     return [
         ReportResponse(id=str(r.id), job_id=str(r.job_id), format=r.format,
                        file_size_bytes=r.file_size_bytes, created_at=r.created_at)
@@ -44,12 +47,18 @@ async def download_pdf(
     current: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Report).where(Report.id == report_id, Report.format == "pdf"))
+    result = await db.execute(
+        select(Report).where(
+            Report.id == report_id,
+            Report.format == "pdf",
+            Report.tenant_id == uuid.UUID(current["tenant_id"]),
+        )
+    )
     report = result.scalar_one_or_none()
     if not report or not report.storage_path:
         raise HTTPException(404, "Laporan PDF tidak ditemukan")
 
-    obj      = _s3().get_object(Bucket=settings.minio_bucket, Key=report.storage_path)
+    obj = _s3().get_object(Bucket=settings.minio_bucket, Key=report.storage_path)
     pdf_data = obj["Body"].read()
 
     await create_audit_log(
@@ -71,7 +80,12 @@ async def download_json(
     current: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Report).where(Report.id == report_id))
+    result = await db.execute(
+        select(Report).where(
+            Report.id == report_id,
+            Report.tenant_id == uuid.UUID(current["tenant_id"]),
+        )
+    )
     report = result.scalar_one_or_none()
     if not report:
         raise HTTPException(404, "Laporan tidak ditemukan")

@@ -1,3 +1,4 @@
+import uuid
 import json
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Depends
@@ -14,15 +15,20 @@ settings = get_settings()
 
 
 async def _build_stats(db: AsyncSession, tenant_id: str) -> dict:
+    tid = uuid.UUID(tenant_id)
     now = datetime.now(timezone.utc)
     month_ago = now - timedelta(days=30)
 
     targets_count = (await db.execute(
         select(func.count()).select_from(OJSTarget)
+        .where(OJSTarget.tenant_id == tid)
     )).scalar()
 
     scans_result = await db.execute(
-        select(ScanJob).where(ScanJob.created_at >= month_ago)
+        select(ScanJob).where(
+            ScanJob.tenant_id == tid,
+            ScanJob.created_at >= month_ago,
+        )
     )
     scans = scans_result.scalars().all()
     completed = [s for s in scans if s.status == "completed"]
