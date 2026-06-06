@@ -3,7 +3,7 @@ import hashlib
 import time
 from fastapi import Request
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
+from sqlalchemy import select, text
 from app.database import AsyncSessionLocal
 from app.models import OJSTarget
 from app.services.crypto import decrypt_api_key
@@ -28,6 +28,9 @@ async def plugin_auth_middleware(request: Request, call_next):
     # 2. Lookup target + decrypt key
     body = await request.body()
     async with AsyncSessionLocal() as session:
+        # Plugin auth perlu baca target lintas semua tenant.
+        # SET LOCAL di-reset otomatis saat session ditutup — tidak bocor ke pool.
+        await session.execute(text("SET LOCAL app.user_role = 'saas_admin'"))
         result = await session.execute(
             select(OJSTarget).where(OJSTarget.id == target_id)
         )
