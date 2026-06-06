@@ -44,8 +44,8 @@ services:
     environment:
       POSTGRES_DB: ojsdef
       POSTGRES_USER: ojsdef
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ojsdef_pass}
-      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:-ojsdef_app_pass}
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-ojsdef_pass}"
+      POSTGRES_APP_PASSWORD: "${POSTGRES_APP_PASSWORD:-ojsdef_app_pass}"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init-db/:/docker-entrypoint-initdb.d/:ro
