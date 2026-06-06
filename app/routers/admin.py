@@ -50,6 +50,10 @@ async def create_user(body: CreateUserRequest, db: AsyncSession = Depends(get_db
     if existing_user.scalar_one_or_none():
         raise HTTPException(409, "Email sudah terdaftar")
 
+    # Validate Telegram bot is configured before creating user
+    if not settings.telegram_bot_username:
+        raise HTTPException(503, "Telegram bot belum dikonfigurasi")
+
     temp_password = secrets.token_urlsafe(12)
     user = User(
         id=uuid.uuid4(), tenant_id=tid,
@@ -72,8 +76,6 @@ async def create_user(body: CreateUserRequest, db: AsyncSession = Depends(get_db
         resource_type="user", resource_id=str(user.id),
         details={"email": user.email, "role": user.role},
     )
-    if not settings.telegram_bot_username:
-        raise HTTPException(503, "Telegram bot belum dikonfigurasi")
     deeplink = f"https://t.me/{settings.telegram_bot_username}?start={link_token}"
     return CreateUserResponse(
         id=str(user.id), email=user.email, full_name=user.full_name,

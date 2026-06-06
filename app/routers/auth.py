@@ -170,6 +170,12 @@ async def get_telegram_link(
         raise HTTPException(409, "Akun Telegram sudah terhubung")
     if not settings.telegram_bot_username:
         raise HTTPException(503, "Telegram bot belum dikonfigurasi")
+    # Reuse existing valid token if not expired
+    if user.telegram_link_token and user.telegram_link_token_expires:
+        if user.telegram_link_token_expires > datetime.now(timezone.utc):
+            deeplink = f"https://t.me/{settings.telegram_bot_username}?start={user.telegram_link_token}"
+            return {"deeplink": deeplink, "expires_at": user.telegram_link_token_expires.isoformat()}
+    # Generate new token
     link_token = secrets.token_urlsafe(32)
     link_expires = datetime.now(timezone.utc) + timedelta(days=7)
     user.telegram_link_token = link_token
