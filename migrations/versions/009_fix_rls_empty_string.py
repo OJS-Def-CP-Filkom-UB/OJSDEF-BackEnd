@@ -7,14 +7,14 @@ saat plugin_auth_middleware query ojs_targets tanpa tenant context.
 Fix: NULLIF(..., '') mengubah '' menjadi NULL sebelum cast ke uuid, sehingga
 NULL::uuid = NULL (aman) bukan error.
 
-Revision ID: 007
-Revises: 006
+Revision ID: 009
+Revises: 008
 Create Date: 2026-06-06
 """
 from alembic import op
 
-revision = "007"
-down_revision = "006"
+revision = "009"
+down_revision = "008"
 branch_labels = None
 depends_on = None
 
