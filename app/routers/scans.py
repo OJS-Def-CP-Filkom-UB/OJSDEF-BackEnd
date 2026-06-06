@@ -13,6 +13,7 @@ from app.services.auth import get_current_user, require_role
 from app.core.audit import create_audit_log
 from app.celery_app import celery_app
 from app.config import get_settings
+from app.routers._tenant_helper import resolve_tenant_filter
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,8 @@ async def start_scan(
     current: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    if current["role"] == "saas_admin":
+        raise HTTPException(403, "saas_admin tidak dapat memulai scan")
     tid = uuid.UUID(current["tenant_id"])
     result = await db.execute(
         select(OJSTarget).where(
@@ -116,19 +119,17 @@ async def start_scan(
 
 @router.get("", response_model=list[ScanResponse])
 async def list_scans(
+    tenant_id: str | None = None,
     target_id: str | None = None,
     status: str | None = None,
     limit: int = 20,
     current: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tid = uuid.UUID(current["tenant_id"])
-    q = (
-        select(ScanJob)
-        .where(ScanJob.tenant_id == tid)
-        .order_by(ScanJob.created_at.desc())
-        .limit(limit)
-    )
+    tid = resolve_tenant_filter(current, tenant_id)
+    q = select(ScanJob).order_by(ScanJob.created_at.desc()).limit(limit)
+    if tid is not None:
+        q = q.where(ScanJob.tenant_id == tid)
     if target_id:
         q = q.where(ScanJob.target_id == target_id)
     if status:
@@ -143,13 +144,10 @@ async def get_scan(
     current: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(ScanJob).where(
-            ScanJob.id == job_id,
-            ScanJob.tenant_id == uuid.UUID(current["tenant_id"]),
-        )
-    )
-    job = result.scalar_one_or_none()
+    q = select(ScanJob).where(ScanJob.id == job_id)
+    if current["role"] != "saas_admin":
+        q = q.where(ScanJob.tenant_id == uuid.UUID(current["tenant_id"]))
+    job = (await db.execute(q)).scalar_one_or_none()
     if not job:
         raise HTTPException(404, "Scan tidak ditemukan")
     progress = await _get_progress(str(job_id))
@@ -165,14 +163,10 @@ async def get_findings(
     current: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # Verifikasi job milik tenant ini sebelum query findings
-    job_result = await db.execute(
-        select(ScanJob).where(
-            ScanJob.id == job_id,
-            ScanJob.tenant_id == uuid.UUID(current["tenant_id"]),
-        )
-    )
-    if not job_result.scalar_one_or_none():
+    job_q = select(ScanJob).where(ScanJob.id == job_id)
+    if current["role"] != "saas_admin":
+        job_q = job_q.where(ScanJob.tenant_id == uuid.UUID(current["tenant_id"]))
+    if not (await db.execute(job_q)).scalar_one_or_none():
         raise HTTPException(404, "Scan tidak ditemukan")
 
     q = select(ScanFinding).where(ScanFinding.job_id == job_id)
@@ -199,7 +193,7 @@ async def get_findings(
 async def mark_false_positive(
     job_id: uuid.UUID,
     finding_id: uuid.UUID,
-    current: dict = Depends(require_role("admin_ojs", "saas_admin")),
+    current: dict = Depends(require_role("admin_ojs")),
     db: AsyncSession = Depends(get_db),
 ):
     # Verifikasi job milik tenant ini
@@ -242,6 +236,8 @@ async def cancel_scan(
     current: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    if current["role"] == "saas_admin":
+        raise HTTPException(403, "saas_admin tidak dapat membatalkan scan")
     job = (await db.execute(
         select(ScanJob).where(
             ScanJob.id == job_id,
