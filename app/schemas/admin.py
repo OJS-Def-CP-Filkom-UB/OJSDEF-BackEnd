@@ -14,7 +14,7 @@ class CreateUserRequest(BaseModel):
 class CreateUserResponse(UserResponse):
     """Response untuk POST /admin/users — temp_password hanya muncul sekali."""
     temp_password: str
-    telegram_bot_deeplink: str
+    telegram_bot_deeplink: str = ""
 
 
 class PatchUserRequest(BaseModel):
