@@ -18,6 +18,7 @@ from app.services.crypto import decrypt_api_key
 from app.services.auth import get_current_user
 from app.core.audit import create_audit_log
 from app.config import get_settings
+from app.routers._tenant_helper import resolve_tenant_filter
 
 
 def _compute_plugin_status_str(t: OJSTarget) -> str:
@@ -56,13 +57,15 @@ def _to_response(t: OJSTarget) -> TargetResponse:
 
 @router.get("", response_model=list[TargetResponse])
 async def list_targets(
+    tenant_id: str | None = None,
     current: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tid = uuid.UUID(current["tenant_id"])
-    result = await db.execute(
-        select(OJSTarget).where(OJSTarget.tenant_id == tid)
-    )
+    tid = resolve_tenant_filter(current, tenant_id)
+    q = select(OJSTarget)
+    if tid is not None:
+        q = q.where(OJSTarget.tenant_id == tid)
+    result = await db.execute(q)
     return [_to_response(t) for t in result.scalars()]
 
 
@@ -72,6 +75,8 @@ async def add_target(
     current: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    if current["role"] == "saas_admin":
+        raise HTTPException(403, "saas_admin tidak dapat mengelola target")
     target = await create_target(db, uuid.UUID(current["tenant_id"]), body.name, body.url)
     await create_audit_log(
         db, user_id=current.get("sub"), user_email=current.get("email", "unknown"),
@@ -88,13 +93,10 @@ async def get_target(
     current: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(OJSTarget).where(
-            OJSTarget.id == target_id,
-            OJSTarget.tenant_id == uuid.UUID(current["tenant_id"]),
-        )
-    )
-    target = result.scalar_one_or_none()
+    q = select(OJSTarget).where(OJSTarget.id == target_id)
+    if current["role"] != "saas_admin":
+        q = q.where(OJSTarget.tenant_id == uuid.UUID(current["tenant_id"]))
+    target = (await db.execute(q)).scalar_one_or_none()
     if not target:
         raise HTTPException(404, "Target tidak ditemukan")
     return _to_response(target)
@@ -106,6 +108,8 @@ async def delete_target(
     current: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    if current["role"] == "saas_admin":
+        raise HTTPException(403, "saas_admin tidak dapat mengelola target")
     result = await db.execute(
         select(OJSTarget).where(
             OJSTarget.id == target_id,
@@ -132,6 +136,8 @@ async def verify_target(
     current: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    if current["role"] == "saas_admin":
+        raise HTTPException(403, "saas_admin tidak dapat mengelola target")
     result = await db.execute(
         select(OJSTarget).where(
             OJSTarget.id == target_id,
@@ -219,6 +225,8 @@ async def regen_key(
     current: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    if current["role"] == "saas_admin":
+        raise HTTPException(403, "saas_admin tidak dapat mengelola target")
     result = await db.execute(
         select(OJSTarget).where(
             OJSTarget.id == target_id,
