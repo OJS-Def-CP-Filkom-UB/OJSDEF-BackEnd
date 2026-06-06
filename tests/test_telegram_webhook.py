@@ -1,4 +1,8 @@
-"""Tests for Telegram webhook handler — run on VPS with live DB."""
+"""Tests for Telegram webhook handler.
+
+Tests that require a live DB (valid token linking flow) are marked with
+@pytest.mark.integration and skipped in unit test runs.
+"""
 import pytest
 from unittest.mock import AsyncMock, patch
 from httpx import AsyncClient
@@ -69,7 +73,17 @@ async def test_webhook_invalid_token_replies(
             "text": "/start invalidtoken999xyz",
         },
     }
-    with patch("app.routers.telegram_bot._bot_reply", new_callable=AsyncMock) as mock_reply:
+    with (
+        patch("app.routers.telegram_bot._bot_reply", new_callable=AsyncMock) as mock_reply,
+        patch("app.routers.telegram_bot.AsyncSessionLocal") as mock_session_cls,
+    ):
+        # Mock the async context manager to return a session where scalar_one_or_none returns None
+        mock_session = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+        mock_session.execute = AsyncMock(return_value=AsyncMock(scalar_one_or_none=lambda: None))
+        mock_session_cls.return_value = mock_session
+
         response = await async_client.post(
             "/telegram/webhook",
             json=update,
