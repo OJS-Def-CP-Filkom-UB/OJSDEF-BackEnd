@@ -1,6 +1,7 @@
 import asyncio
 import uuid
 import os
+from datetime import datetime, timezone, timedelta
 from jinja2 import Environment, FileSystemLoader
 from sqlalchemy import select
 import httpx
@@ -16,6 +17,18 @@ settings = get_settings()
 _jinja = Environment(loader=FileSystemLoader(
     os.path.join(os.path.dirname(__file__), "..", "templates")
 ))
+
+_SCAN_TYPE_LABELS = {
+    "internal": "Audit Internal",
+    "external": "Scan Eksternal",
+    "full": "Audit Penuh",
+}
+_RISK_LABELS = {
+    "critical": "KRITIS",
+    "high": "BERBAHAYA",
+    "medium": "PERHATIAN",
+    "low": "AMAN",
+}
 
 
 async def _email(to: str, subject: str, html: str) -> bool:
@@ -41,19 +54,121 @@ async def _telegram(chat_id: str, text: str) -> bool:
         return False
 
 
+# ── Welcome ────────────────────────────────────────────────────────────────────
+
+async def _run_send_welcome(user_id: str):
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        if not user or not user.telegram_chat_id:
+            return
+
+        text = (
+            "🎉 Selamat datang di OJSDef!\n\n"
+            "Akun Anda telah berhasil terhubung ke Telegram.\n\n"
+            f"📧 Email: {user.email}\n"
+            "🔑 Password sementara dikirimkan oleh admin Anda.\n\n"
+            "⚠️ Wajib mengganti password saat pertama login!\n\n"
+            f"🌐 Login di: {settings.frontend_base_url}/login\n\n"
+            "Bot ini akan mengirimkan notifikasi keamanan OJS Anda\n"
+            "secara otomatis. Tidak perlu membalas pesan ini."
+        )
+        sent = await _telegram(user.telegram_chat_id, text)
+        session.add(Notification(
+            id=uuid.uuid4(), tenant_id=user.tenant_id, job_id=None,
+            user_id=user.id, channel="telegram", notif_type="welcome",
+            is_sent=sent, error_log=None if sent else "Telegram API failed",
+        ))
+        await session.commit()
+
+
+@celery_app.task(name="app.workers.notify.send_welcome",
+                 bind=True, max_retries=3, autoretry_for=(Exception,), default_retry_delay=60)
+def send_welcome(self, user_id: str):
+    asyncio.run(_run_send_welcome(user_id))
+
+
+# ── Scan Completed ─────────────────────────────────────────────────────────────
+
+async def _run_send_scan_completed(job_id: str):
+    async with AsyncSessionLocal() as session:
+        job = (await session.execute(select(ScanJob).where(ScanJob.id == job_id))).scalar_one()
+        if job.status != "completed":
+            return
+
+        target = (await session.execute(
+            select(OJSTarget).where(OJSTarget.id == job.target_id)
+        )).scalar_one()
+
+        users = [
+            u for u in (await session.execute(
+                select(User).where(User.tenant_id == job.tenant_id, User.is_active == True)
+            )).scalars()
+            if u.notif_telegram and u.telegram_chat_id
+        ]
+
+        if not users:
+            return
+
+        scan_type_label = _SCAN_TYPE_LABELS.get(job.scan_type, job.scan_type)
+        risk_label = _RISK_LABELS.get(job.risk_level or "", job.risk_level or "N/A")
+        wib = timezone(timedelta(hours=7))
+        created_wib = job.created_at.astimezone(wib).strftime("%d/%m/%Y %H:%M")
+
+        text = (
+            f"✅ Scan Selesai — {target.name}\n\n"
+            f"Jenis Scan : {scan_type_label}\n"
+            f"Skor Risiko: {job.overall_score}/100 — {risk_label}\n"
+            f"Waktu Scan : {created_wib} WIB\n\n"
+            "Ringkasan Temuan:\n"
+            f"🔴 Kritis   : {job.critical_count}\n"
+            f"🟠 Berbahaya: {job.high_count}\n"
+            f"🟡 Perhatian: {job.medium_count}\n"
+            f"🟢 Aman     : {job.low_count}\n\n"
+            f"🔗 Lihat Laporan: {settings.frontend_base_url}/vulnerability-report"
+        )
+
+        for user in users:
+            sent = await _telegram(user.telegram_chat_id, text)
+            session.add(Notification(
+                id=uuid.uuid4(), tenant_id=job.tenant_id, job_id=job.id,
+                user_id=user.id, channel="telegram", notif_type="scan_completed",
+                is_sent=sent, error_log=None if sent else "Telegram API failed",
+            ))
+        await session.commit()
+
+
+@celery_app.task(name="app.workers.notify.send_scan_completed",
+                 bind=True, max_retries=3, autoretry_for=(Exception,), default_retry_delay=60)
+def send_scan_completed(self, job_id: str):
+    asyncio.run(_run_send_scan_completed(job_id))
+
+
+# ── Critical Alert ─────────────────────────────────────────────────────────────
+
 async def _run_critical_alert(job_id: str, finding_ids: list[str]):
     async with AsyncSessionLocal() as session:
         job = (await session.execute(select(ScanJob).where(ScanJob.id == job_id))).scalar_one()
-        target = (await session.execute(select(OJSTarget).where(OJSTarget.id == job.target_id))).scalar_one()
+        if job.status != "completed":
+            return
+        target = (await session.execute(
+            select(OJSTarget).where(OJSTarget.id == job.target_id)
+        )).scalar_one()
         findings = (await session.execute(
             select(ScanFinding).where(
                 ScanFinding.id.in_(finding_ids),
                 ScanFinding.tenant_id == job.tenant_id,
             )
         )).scalars().all()
-        users = [u for u in (await session.execute(
-            select(User).where(User.tenant_id == job.tenant_id, User.is_active == True)
-        )).scalars() if u.notif_email or u.notif_telegram]
+        users = [
+            u for u in (await session.execute(
+                select(User).where(User.tenant_id == job.tenant_id, User.is_active == True)
+            )).scalars()
+            if u.notif_email or u.notif_telegram
+        ]
+
+        if not users:
+            return
 
         subject = f"[OJSDef] Ancaman Kritis Terdeteksi — {target.name}"
         html_body = _jinja.get_template("email_critical.html").render(
@@ -62,10 +177,20 @@ async def _run_critical_alert(job_id: str, finding_ids: list[str]):
             findings=findings,
             dashboard_url=settings.allowed_origins_list[0] + "/dashboard",
         )
+
+        findings_list = "\n".join(f"• {f.title}" for f in findings[:5])
+        count = len(findings)
+
         tg_text = (
-            f"Ancaman Kritis — {target.name}\n"
-            f"Skor: {job.overall_score}/100 ({job.risk_level})\n"
-            + "\n".join(f"- {f.title}" for f in findings[:5])
+            "🚨 ANCAMAN KRITIS TERDETEKSI\n\n"
+            f"Target: {target.name}\n"
+            f"URL: {target.url}\n"
+            f"Skor Risiko: {job.overall_score}/100 — KRITIS\n\n"
+            f"Temuan Kritis ({count} temuan):\n"
+            f"{findings_list}\n\n"
+            "⏱ SLA Perbaikan: 24 jam\n"
+            f"🔗 Lihat Detail: {settings.frontend_base_url}/vulnerability-report\n\n"
+            "Segera tindaklanjuti sebelum sistem Anda dieksploitasi."
         )
 
         for user in users:

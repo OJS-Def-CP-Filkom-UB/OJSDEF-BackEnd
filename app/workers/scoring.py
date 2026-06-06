@@ -71,6 +71,12 @@ async def _run_scoring(job_id: str):
     await r.setex(f"scan_progress:{job_id}", 3600, json.dumps(progress))
     await r.aclose()
 
+    # Notify all tenant users that scan completed
+    celery_app.send_task(
+        "app.workers.notify.send_scan_completed",
+        args=[job_id], queue="notifications",
+    )
+
     if counts["critical"] > 0:
         celery_app.send_task(
             "app.workers.notify.send_critical_alert",
