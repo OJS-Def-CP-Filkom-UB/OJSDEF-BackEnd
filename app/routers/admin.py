@@ -1,6 +1,7 @@
 import re
 import uuid
 import secrets
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -12,6 +13,9 @@ from app.schemas.admin import (
 )
 from app.services.auth import require_role, hash_password
 from app.core.audit import create_audit_log
+from app.config import get_settings
+
+settings = get_settings()
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 _saas = Depends(require_role("saas_admin"))
@@ -53,6 +57,12 @@ async def create_user(body: CreateUserRequest, db: AsyncSession = Depends(get_db
         hashed_password=hash_password(temp_password),
         must_change_password=True,
     )
+    # Generate one-time linking token (7-day TTL)
+    link_token = secrets.token_urlsafe(32)
+    link_expires = datetime.now(timezone.utc) + timedelta(days=7)
+    user.telegram_username = body.telegram_username
+    user.telegram_link_token = link_token
+    user.telegram_link_token_expires = link_expires
     db.add(user)
     await db.commit()
     await db.refresh(user)
@@ -62,12 +72,15 @@ async def create_user(body: CreateUserRequest, db: AsyncSession = Depends(get_db
         resource_type="user", resource_id=str(user.id),
         details={"email": user.email, "role": user.role},
     )
+    deeplink = f"https://t.me/{settings.telegram_bot_username}?start={link_token}"
     return CreateUserResponse(
         id=str(user.id), email=user.email, full_name=user.full_name,
         role=user.role, must_change_password=user.must_change_password,
         notif_email=user.notif_email, notif_telegram=user.notif_telegram,
         telegram_chat_id=user.telegram_chat_id,
+        telegram_username=user.telegram_username,
         temp_password=temp_password,
+        telegram_bot_deeplink=deeplink,
     )
 
 

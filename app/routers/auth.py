@@ -1,3 +1,5 @@
+import secrets
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -155,3 +157,19 @@ async def change_password(
         resource_type="auth",
         resource_id=str(user.id),
     )
+
+
+@router.get("/telegram-link")
+async def get_telegram_link(
+    current: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(User).where(User.id == current["sub"]))
+    user = result.scalar_one()
+    link_token = secrets.token_urlsafe(32)
+    link_expires = datetime.now(timezone.utc) + timedelta(days=7)
+    user.telegram_link_token = link_token
+    user.telegram_link_token_expires = link_expires
+    await db.commit()
+    deeplink = f"https://t.me/{settings.telegram_bot_username}?start={link_token}"
+    return {"deeplink": deeplink, "expires_at": link_expires.isoformat()}

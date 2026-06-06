@@ -1,6 +1,8 @@
+import logging
 from contextlib import asynccontextmanager
 import redis.asyncio as aioredis
 import boto3
+import httpx
 from botocore.exceptions import ClientError
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,6 +10,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app.config import get_settings
 from app.database import engine
 from sqlalchemy import text
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
@@ -38,6 +42,18 @@ async def lifespan(app: FastAPI):
             s3.create_bucket(Bucket=settings.minio_bucket)
     except Exception:
         pass
+    # Telegram webhook registration (non-fatal if it fails)
+    if settings.telegram_bot_token and settings.telegram_webhook_secret:
+        webhook_url = f"{settings.app_base_url}/telegram/webhook"
+        try:
+            async with httpx.AsyncClient(timeout=10) as c:
+                await c.post(
+                    f"https://api.telegram.org/bot{settings.telegram_bot_token}/setWebhook",
+                    json={"url": webhook_url, "secret_token": settings.telegram_webhook_secret},
+                )
+            logger.info("Telegram webhook registered: %s", webhook_url)
+        except Exception as e:
+            logger.warning("Telegram webhook registration failed (non-fatal): %s", e)
     yield
 
 
@@ -75,6 +91,7 @@ from app.routers import dashboard as dashboard_router
 from app.routers import admin as admin_router
 from app.routers import plugin_callback as plugin_router
 from app.routers.audit_logs import router as audit_logs_router
+from app.routers import telegram_bot as telegram_bot_router
 
 app.include_router(auth_router.router)
 app.include_router(targets_router.router)
@@ -84,3 +101,4 @@ app.include_router(dashboard_router.router)
 app.include_router(admin_router.router)
 app.include_router(plugin_router.router)
 app.include_router(audit_logs_router)
+app.include_router(telegram_bot_router.router)
