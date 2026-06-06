@@ -42,7 +42,8 @@
 > | Area | Status | Catatan Implementasi |
 > |---|---|---|
 > | **Backend API (FastAPI)** | ✅ IMPLEMENTED | Semua router: auth, targets, scans, reports, dashboard, admin, audit_logs, plugin_callback |
-> | **Database (PostgreSQL + RLS)** | ✅ IMPLEMENTED | 4 migrations applied; ERD aktual berbeda dari spec (lihat Section 4) |
+> | **Database (PostgreSQL + RLS)** | ✅ IMPLEMENTED | 6 migrations applied; ERD aktual berbeda dari spec (lihat Section 4) |
+> | **RBAC Multi-Tenancy Isolation** | ✅ IMPLEMENTED | FORCE RLS + role `ojsdef_app` (non-owner, runtime) + dual engine; migration 006 |
 > | **Celery Workers (4 queues)** | ✅ IMPLEMENTED | internal_scan, external_scan, scoring, notifications |
 > | **Plugin PHP v1.0.1** | ✅ IMPLEMENTED | 6 dari 8 scanner modules di spec (FR-INT-07 & FR-INT-08 deferred) |
 > | **External Bot (8 modul)** | ✅ IMPLEMENTED | + cookie_analyzer (tidak ada di spec); FR-EXT-08 deferred |
@@ -60,6 +61,7 @@
 > - Kolom baru di `audit_logs`: `user_email` (nullable), `tenant_id` dibuat nullable
 > - Frontend menggunakan **Next.js 16 / React 19 / Tailwind v4** (bukan Next.js 14/React 18/Tailwind v3)
 > - Plugin protocol menggunakan **Hybrid A+C** — lihat Section 3.3.2 yang ditambahkan
+> - RBAC multi-tenancy: dua DB engine (`ojsdef` table owner vs `ojsdef_app` non-owner) + `FORCE ROW LEVEL SECURITY` pada 8 tabel tenant — migration 006; `saas_admin` bypass via RLS policy condition
 
 ---
 

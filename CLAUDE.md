@@ -88,7 +88,9 @@ app/
     ├── 001_initial.py         — Schema awal
     ├── 002_plugin_connection_fields.py — Tambah trigger/probe/connection_mode/pending_scan ke ojs_targets
     ├── 003_audit_log_user_email_nullable_tenant.py — Tambah user_email, buat tenant_id nullable di audit_logs
-    └── 004_internal_scan_diagnostics.py — Tambah diagnostic_code/diagnostic_detail ke scan_jobs, force_heartbeat ke ojs_targets
+    ├── 004_internal_scan_diagnostics.py — Tambah diagnostic_code/diagnostic_detail ke scan_jobs, force_heartbeat ke ojs_targets
+    ├── 005_telegram_notification.py     — Tambah telegram_username/token ke users; job_id nullable di notifications
+    └── 006_rbac_tenancy_fix.py          — FORCE RLS pada 8 tabel, buat role ojsdef_app, update policy tenant_isolation
 ```
 
 ## Tech Stack
@@ -110,8 +112,10 @@ app/
 
 **PostgreSQL 16** dengan Row-Level Security (RLS) untuk multi-tenancy:
 - Setiap tabel utama punya `tenant_id`
-- FastAPI middleware inject `SET app.current_tenant_id = '<uuid>'` ke setiap session
-- RLS policy otomatis memfilter query per tenant
+- **Dual DB engine**: `engine` (runtime — role `ojsdef_app`, non-owner, kena `FORCE ROW LEVEL SECURITY`) dan `owner_engine` (role `ojsdef` — table owner, bypass RLS; dipakai Celery workers + auth)
+- `get_db(request)` — inject `SET app.current_tenant_id` + `SET app.current_role` ke session; reset ke `''` di `finally` sebelum koneksi dikembalikan ke pool
+- `get_auth_db()` — yield owner session untuk endpoint login/refresh (belum ada JWT saat login, bypass RLS)
+- `saas_admin` bypass RLS via policy condition: `current_setting('app.current_role', true) = 'saas_admin'`
 
 **Redis 7** dual-use: Celery task broker + cache scan progress (TTL 3600s).
 
@@ -231,11 +235,21 @@ Scoring worker jalan setelah scan selesai. Temuan Critical otomatis trigger `not
 
 ### Migration setelah update terbaru
 
+Pastikan role `ojsdef_app` sudah ada dan `DATABASE_URL_APP` di `.env` sudah diisi sebelum jalankan migration:
+
+```sql
+-- Jalankan satu kali di psql (jika role belum ada)
+CREATE ROLE ojsdef_app WITH LOGIN PASSWORD '<password_aman>';
+GRANT USAGE ON SCHEMA public TO ojsdef_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ojsdef_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ojsdef_app;
+```
+
 ```bash
 alembic upgrade head
 ```
 
-Migration terbaru (004): menambah `diagnostic_code`, `diagnostic_detail` di `scan_jobs`, dan `force_heartbeat` di `ojs_targets`.
+Migration terbaru (006): `FORCE ROW LEVEL SECURITY` pada 8 tabel tenant, buat role `ojsdef_app`, dan update policy `tenant_isolation` dengan bypass untuk `saas_admin`.
 
 ### Celery Beat
 
@@ -260,6 +274,7 @@ Role lama `it_admin` sudah dihapus; gunakan `admin_ojs` untuk IT teams.
 
 ```env
 DATABASE_URL=postgresql+asyncpg://ojsdef:<password>@localhost:5432/ojsdef
+DATABASE_URL_APP=postgresql+asyncpg://ojsdef_app:<password>@localhost:5432/ojsdef
 REDIS_URL=redis://localhost:6379/0
 JWT_SECRET=<secret-min-32-chars>
 JWT_ALGORITHM=HS256
