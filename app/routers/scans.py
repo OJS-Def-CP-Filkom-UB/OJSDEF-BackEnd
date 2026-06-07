@@ -37,9 +37,13 @@ def _parse_json_list(raw: str | None) -> list[str]:
         return []
     try:
         parsed = json.loads(raw)
-        return parsed if isinstance(parsed, list) else []
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as exc:
+        logger.warning("Malformed JSON list value: %s (%s)", raw[:200], exc)
         return []
+    if isinstance(parsed, list):
+        return parsed
+    logger.warning("Expected JSON list but got %s: %s", type(parsed).__name__, raw[:200])
+    return []
 
 
 def _parse_json_dict(raw: str | None) -> dict[str, str]:
@@ -47,9 +51,13 @@ def _parse_json_dict(raw: str | None) -> dict[str, str]:
         return {}
     try:
         parsed = json.loads(raw)
-        return parsed if isinstance(parsed, dict) else {}
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as exc:
+        logger.warning("Malformed JSON dict value: %s (%s)", raw[:200], exc)
         return {}
+    if isinstance(parsed, dict):
+        return parsed
+    logger.warning("Expected JSON dict but got %s: %s", type(parsed).__name__, raw[:200])
+    return {}
 
 
 def _to_response(job: ScanJob, progress: dict | None = None) -> ScanResponse:
