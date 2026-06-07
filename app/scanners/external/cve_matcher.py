@@ -74,6 +74,12 @@ async def scan_cve(ojs_version: str | None) -> list[FindingResult]:
                 f"Update OJS ke versi terbaru yang telah memperbaiki kerentanan ini. "
                 f"Tinjau advisory keamanan untuk {cve_id}."
             ),
+            references=[
+                f"https://nvd.nist.gov/vuln/detail/{cve_id}",
+                "https://pkp.sfu.ca/category/news/announcements/releases/",
+                "https://forum.pkp.sfu.ca/c/questions-and-answers/security/",
+                "https://docs.pkp.sfu.ca/dev/upgrade-guide/",
+            ],
             cve_id=cve_id,
         )
         for cve_id in cve_ids
