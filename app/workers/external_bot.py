@@ -5,7 +5,7 @@ from sqlalchemy import select
 from urllib.parse import urlparse
 from app.celery_app import celery_app
 from app.database import make_worker_session
-from app.models import ScanJob, ScanFinding
+from app.models import OJSTarget, ScanJob, ScanFinding
 from app.scanners.external.fingerprinter import scan_fingerprint
 from app.scanners.external.ssl_analyzer import scan_ssl, scan_http_redirect
 from app.scanners.external.cookie_analyzer import scan_cookies
@@ -23,45 +23,68 @@ settings = get_settings()
 
 async def _run_external_scan(job_id: str, target_url: str):
     hostname = urlparse(target_url).hostname
+    module_errors: dict[str, str] = {}
+    all_findings: list = []
+    ojs_version = None
 
     if await _check_cancelled(job_id): return
     await write_progress(job_id, "external_scan", 1, 9, "Mendeteksi versi OJS dan fingerprint...", "TASK")
-    ojs_version, fp = await scan_fingerprint(target_url)
+    try:
+        ojs_version, fp = await scan_fingerprint(target_url)
+        all_findings += fp
+    except Exception as e:
+        module_errors["fingerprint_ext"] = str(e)[:100]
 
     if await _check_cancelled(job_id): return
     await write_progress(job_id, "external_scan", 2, 9, "Memeriksa SSL/TLS dan redirect HTTP ke HTTPS...", "TASK")
-    ssl_findings      = scan_ssl(hostname) if hostname else []
-    redirect_findings = await scan_http_redirect(hostname) if hostname else []
+    try:
+        ssl_findings = scan_ssl(hostname) if hostname else []
+        redirect_findings = await scan_http_redirect(hostname) if hostname else []
+        all_findings += ssl_findings + redirect_findings
+    except Exception as e:
+        module_errors["ssl"] = str(e)[:100]
 
     if await _check_cancelled(job_id): return
     await write_progress(job_id, "external_scan", 3, 9, "Menganalisis HTTP security headers...", "TASK")
-    header_findings = await scan_headers(target_url)
+    try:
+        all_findings += await scan_headers(target_url)
+    except Exception as e:
+        module_errors["headers"] = str(e)[:100]
 
     if await _check_cancelled(job_id): return
     await write_progress(job_id, "external_scan", 4, 9, "Menguji kerentanan yang diketahui...", "TASK")
-    vuln_findings = await scan_vulnerabilities(target_url)
+    try:
+        all_findings += await scan_vulnerabilities(target_url)
+    except Exception as e:
+        module_errors["vulnerabilities"] = str(e)[:100]
 
     if await _check_cancelled(job_id): return
     await write_progress(job_id, "external_scan", 5, 9, "Memeriksa direktori dan file sensitif...", "TASK")
-    dir_findings = await scan_open_dirs(target_url)
+    try:
+        all_findings += await scan_open_dirs(target_url)
+    except Exception as e:
+        module_errors["open_dirs"] = str(e)[:100]
 
     if await _check_cancelled(job_id): return
     await write_progress(job_id, "external_scan", 6, 9, "Mencocokkan CVE dari NVD...", "TASK")
-    cve_findings = await scan_cve(ojs_version)
+    try:
+        all_findings += await scan_cve(ojs_version)
+    except Exception as e:
+        module_errors["cve"] = str(e)[:100]
 
     if await _check_cancelled(job_id): return
     await write_progress(job_id, "external_scan", 7, 9, "Memeriksa keamanan cookie sesi...", "TASK")
-    cookie_findings = await scan_cookies(target_url)
+    try:
+        all_findings += await scan_cookies(target_url)
+    except Exception as e:
+        module_errors["cookies"] = str(e)[:100]
 
     if await _check_cancelled(job_id): return
     await write_progress(job_id, "external_scan", 8, 9, "Memeriksa aksesibilitas endpoint OJS...", "TASK")
-    endpoint_findings = await scan_ojs_endpoints(target_url)
-
-    all_findings = (
-        fp + ssl_findings + redirect_findings + header_findings
-        + vuln_findings + dir_findings + cve_findings
-        + cookie_findings + endpoint_findings
-    )
+    try:
+        all_findings += await scan_ojs_endpoints(target_url)
+    except Exception as e:
+        module_errors["endpoints"] = str(e)[:100]
 
     async with make_worker_session() as session:
         job = (await session.execute(select(ScanJob).where(ScanJob.id == job_id))).scalar_one()
@@ -73,7 +96,16 @@ async def _run_external_scan(job_id: str, target_url: str):
                 evidence=f.evidence, remediation=f.remediation,
                 severity=f.severity, cvss_score=f.cvss_score,
                 cve_id=f.cve_id, owasp_category=f.owasp_category,
+                references=json.dumps(f.references) if f.references else None,
+                remediation_steps=json.dumps(f.remediation_steps) if f.remediation_steps else None,
             ))
+        job.module_errors = json.dumps(module_errors) if module_errors else None
+
+        if ojs_version and isinstance(ojs_version, str):
+            target = await session.get(OJSTarget, job.target_id)
+            if target and target.ojs_version != ojs_version:
+                target.ojs_version = ojs_version
+
         await session.commit()
 
     await write_progress(
