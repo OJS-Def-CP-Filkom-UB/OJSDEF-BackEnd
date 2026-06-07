@@ -265,3 +265,367 @@ ENRICHMENT_DATA: dict[str, dict[str, list[str]]] = {
             "https://docs.pkp.sfu.ca/admin-guide/en/plugins",
         ],
     },
+    # ==================== EXTERNAL FINDINGS ====================
+    "ojs_version_exposed": {
+        "remediation_steps": [
+            "Buka file templates/frontend/components/header.tpl atau lib/pkp/templates/common/footer.tpl dan hapus tag generator/meta yang menampilkan versi OJS.",
+            "Periksa juga file README, CHANGELOG, dan dokumen publik lain di webroot yang mungkin mengekspos versi.",
+            "Tambahkan aturan Nginx untuk memblokir akses dokumen tersebut: location ~* (README|CHANGELOG)\\.(md|txt)$ { deny all; }",
+            "Verifikasi dengan curl https://<domain> | grep -i \"ojs\" untuk memastikan versi tidak lagi terekspos di HTML.",
+        ],
+        "references": [
+            "https://owasp.org/Top10/A05_2021-Security_Misconfiguration/",
+            "https://cwe.mitre.org/data/definitions/200.html",
+            "https://docs.pkp.sfu.ca/dev/documentation/en/getting-started",
+        ],
+    },
+    "outdated_ojs_version": {
+        "remediation_steps": [
+            "Cek versi OJS terbaru yang stabil di https://pkp.sfu.ca/ojs/ojs_download/",
+            "Backup database dan seluruh file OJS sebelum upgrade: pg_dump ojsdb > backup.sql && tar -czf ojs-backup.tar.gz /path/to/ojs",
+            "Baca catatan rilis (release notes) untuk perubahan breaking dan langkah migrasi khusus.",
+            "Ikuti panduan upgrade resmi: https://docs.pkp.sfu.ca/dev/upgrade-guide/",
+            "Jalankan php tools/upgrade.php upgrade setelah file baru di-deploy.",
+            "Verifikasi fungsionalitas jurnal pasca-upgrade dan jalankan ulang scan untuk konfirmasi versi sudah terbaru.",
+        ],
+        "references": [
+            "https://owasp.org/Top10/A06_2021-Vulnerable_and_Outdated_Components/",
+            "https://cwe.mitre.org/data/definitions/1104.html",
+            "https://docs.pkp.sfu.ca/dev/upgrade-guide/",
+            "https://pkp.sfu.ca/category/news/announcements/releases/",
+        ],
+    },
+    "ssl_expired": {
+        "remediation_steps": [
+            "Perbarui sertifikat SSL segera — sertifikat kedaluwarsa menyebabkan semua pengunjung melihat peringatan keamanan.",
+            "Jika menggunakan Let's Encrypt: jalankan sudo certbot renew --force-renewal",
+            "Jika menggunakan CA komersial: beli/renew sertifikat baru dari penyedia CA, lalu install di web server.",
+            "Setelah install sertifikat baru, reload Nginx: sudo systemctl reload nginx",
+            "Aktifkan auto-renewal untuk mencegah kedaluwarsa di masa depan: sudo systemctl enable certbot.timer",
+            "Verifikasi sertifikat baru: openssl s_client -connect <domain>:443 | grep \"notAfter\"",
+        ],
+        "references": [
+            "https://owasp.org/Top10/A02_2021-Cryptographic_Failures/",
+            "https://cwe.mitre.org/data/definitions/298.html",
+            "https://letsencrypt.org/docs/certificate-compatibility/",
+            "https://cheatsheetseries.owasp.org/cheatsheets/Transport_Layer_Security_Cheat_Sheet.html",
+        ],
+    },
+    "ssl_expiring_soon": {
+        "remediation_steps": [
+            "Cek tanggal kedaluwarsa pasti: openssl s_client -connect <domain>:443 | grep \"notAfter\"",
+            "Jika menggunakan Let's Encrypt: pastikan certbot.timer aktif untuk auto-renewal: sudo systemctl status certbot.timer",
+            "Jika auto-renewal tidak aktif, jalankan manual: sudo certbot renew",
+            "Jika menggunakan CA komersial: ajukan renewal sebelum tanggal kedaluwarsa ke penyedia CA.",
+            "Setelah sertifikat baru terpasang, reload web server: sudo systemctl reload nginx",
+        ],
+        "references": [
+            "https://owasp.org/Top10/A02_2021-Cryptographic_Failures/",
+            "https://cwe.mitre.org/data/definitions/298.html",
+            "https://letsencrypt.org/docs/certificate-compatibility/",
+        ],
+    },
+    "weak_tls": {
+        "remediation_steps": [
+            "Buka konfigurasi Nginx (biasanya /etc/nginx/sites-available/<site>) dan temukan directive ssl_protocols.",
+            "Nonaktifkan protokol lama: ssl_protocols TLSv1.2 TLSv1.3; (hapus SSLv3, TLSv1.0, TLSv1.1)",
+            "Perbarui daftar cipher suite ke preset modern dari https://ssl-config.mozilla.org/ (pilih profil 'Intermediate').",
+            "Reload Nginx: sudo systemctl reload nginx",
+            "Verifikasi konfigurasi dengan https://www.ssllabs.com/ssltest/ atau testssl.sh — targetkan grade A.",
+        ],
+        "references": [
+            "https://owasp.org/Top10/A02_2021-Cryptographic_Failures/",
+            "https://cwe.mitre.org/data/definitions/327.html",
+            "https://ssl-config.mozilla.org/",
+            "https://cheatsheetseries.owasp.org/cheatsheets/Transport_Layer_Security_Cheat_Sheet.html",
+        ],
+    },
+    "http_no_https_redirect": {
+        "remediation_steps": [
+            "Buka konfigurasi server block Nginx untuk port 80 (HTTP).",
+            "Tambahkan redirect permanen ke HTTPS: server { listen 80; server_name <domain>; return 301 https://$host$request_uri; }",
+            "Pastikan tidak ada konten yang disajikan langsung melalui blok HTTP tersebut.",
+            "Reload konfigurasi: sudo systemctl reload nginx",
+            "Verifikasi: curl -I http://<domain> — harus mengembalikan status 301 dengan header Location: https://...",
+        ],
+        "references": [
+            "https://owasp.org/Top10/A02_2021-Cryptographic_Failures/",
+            "https://cwe.mitre.org/data/definitions/319.html",
+            "https://cheatsheetseries.owasp.org/cheatsheets/Transport_Layer_Security_Cheat_Sheet.html",
+        ],
+    },
+    "missing_csp": {
+        "remediation_steps": [
+            "Tambahkan header Content-Security-Policy di blok server Nginx.",
+            "Mulai dengan kebijakan moderat: add_header Content-Security-Policy \"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;\" always;",
+            "Uji halaman jurnal dalam mode Report-Only (Content-Security-Policy-Report-Only) untuk mendeteksi resource yang terblokir.",
+            "Sesuaikan whitelist sumber berdasarkan resource yang dibutuhkan tema/plugin OJS yang dipakai.",
+            "Setelah stabil, terapkan sebagai kebijakan enforced (bukan report-only) dan reload Nginx.",
+        ],
+        "references": [
+            "https://owasp.org/Top10/A05_2021-Security_Misconfiguration/",
+            "https://cwe.mitre.org/data/definitions/693.html",
+            "https://cheatsheetseries.owasp.org/cheatsheets/Content_Security_Policy_Cheat_Sheet.html",
+            "https://owasp.org/www-project-secure-headers/",
+        ],
+    },
+    "missing_hsts": {
+        "remediation_steps": [
+            "Pastikan situs sudah sepenuhnya berjalan di HTTPS sebelum mengaktifkan HSTS.",
+            "Tambahkan header di blok server HTTPS Nginx: add_header Strict-Transport-Security \"max-age=31536000; includeSubDomains\" always;",
+            "Mulai dengan max-age kecil (mis. 300 detik) untuk pengujian, lalu naikkan ke 31536000 (1 tahun) setelah yakin tidak ada masalah.",
+            "Reload Nginx: sudo systemctl reload nginx",
+            "Verifikasi dengan curl -I https://<domain> dan cek header Strict-Transport-Security muncul.",
+        ],
+        "references": [
+            "https://owasp.org/Top10/A02_2021-Cryptographic_Failures/",
+            "https://cwe.mitre.org/data/definitions/319.html",
+            "https://cheatsheetseries.owasp.org/cheatsheets/HTTP_Strict_Transport_Security_Cheat_Sheet.html",
+        ],
+    },
+    "missing_x_frame": {
+        "remediation_steps": [
+            "Tambahkan header di blok server Nginx: add_header X-Frame-Options \"SAMEORIGIN\" always;",
+            "Atau gunakan directive frame-ancestors di Content-Security-Policy sebagai pengganti modern: frame-ancestors 'self';",
+            "Reload Nginx: sudo systemctl reload nginx",
+            "Verifikasi dengan curl -I https://<domain> dan cek header X-Frame-Options atau frame-ancestors muncul.",
+        ],
+        "references": [
+            "https://owasp.org/Top10/A05_2021-Security_Misconfiguration/",
+            "https://cwe.mitre.org/data/definitions/1021.html",
+            "https://cheatsheetseries.owasp.org/cheatsheets/Clickjacking_Defense_Cheat_Sheet.html",
+        ],
+    },
+    "missing_referrer_policy": {
+        "remediation_steps": [
+            "Tambahkan header Referrer-Policy di konfigurasi Nginx server block.",
+            "Gunakan nilai: add_header Referrer-Policy \"strict-origin-when-cross-origin\" always;",
+            "Nilai strict-origin-when-cross-origin aman untuk mayoritas jurnal — hanya kirim origin (bukan full URL) saat cross-origin, dan tidak kirim apapun saat downgrade HTTPS→HTTP.",
+            "Reload konfigurasi Nginx: sudo systemctl reload nginx",
+            "Verifikasi dengan curl -I https://<domain> dan cek header Referrer-Policy muncul di respons.",
+        ],
+        "references": [
+            "https://owasp.org/www-project-secure-headers/",
+            "https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Referrer-Policy",
+            "https://cwe.mitre.org/data/definitions/200.html",
+        ],
+    },
+    "missing_permissions_policy": {
+        "remediation_steps": [
+            "Tambahkan header Permissions-Policy di blok server {} konfigurasi Nginx.",
+            "Contoh minimal untuk OJS: add_header Permissions-Policy \"geolocation=(), microphone=(), camera=(), payment=()\" always;",
+            "Sesuaikan daftar fitur dengan kebutuhan jurnal (hapus fitur yang memang tidak dipakai).",
+            "Reload konfigurasi Nginx: sudo systemctl reload nginx",
+            "Verifikasi dengan curl -I https://<domain> dan cek header Permissions-Policy muncul.",
+        ],
+        "references": [
+            "https://owasp.org/www-project-secure-headers/",
+            "https://www.w3.org/TR/permissions-policy-1/",
+        ],
+    },
+    "missing_x_content_type_options": {
+        "remediation_steps": [
+            "Tambahkan header di konfigurasi Nginx: add_header X-Content-Type-Options \"nosniff\" always;",
+            "Kata kunci 'always' penting agar header muncul juga di halaman error (bukan hanya respons 200).",
+            "Reload konfigurasi Nginx: sudo systemctl reload nginx",
+            "Verifikasi di browser DevTools → Network tab → pilih request → Response Headers, cek X-Content-Type-Options: nosniff.",
+        ],
+        "references": [
+            "https://owasp.org/www-project-secure-headers/",
+            "https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-Content-Type-Options",
+            "https://cwe.mitre.org/data/definitions/693.html",
+        ],
+    },
+    "reflected_xss": {
+        "remediation_steps": [
+            "Identifikasi semua parameter input yang direfleksikan ke halaman tanpa encoding (prioritaskan parameter search/query).",
+            "Terapkan output encoding pada setiap nilai yang dirender ke HTML — gunakan htmlspecialchars() dengan ENT_QUOTES di PHP.",
+            "Implementasikan Content-Security-Policy (CSP) yang ketat untuk membatasi sumber script yang diizinkan.",
+            "Validasi dan whitelist input di sisi server — tolak atau encode karakter '<', '>', '\"', \"'\", '/'.",
+            "Pertimbangkan menggunakan library sanitasi seperti HTML Purifier untuk konten yang memang boleh mengandung HTML.",
+            "Jalankan ulang scan setelah perbaikan untuk konfirmasi XSS sudah tidak terdeteksi.",
+        ],
+        "references": [
+            "https://owasp.org/Top10/A03_2021-Injection/",
+            "https://cwe.mitre.org/data/definitions/79.html",
+            "https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html",
+            "https://portswigger.net/web-security/cross-site-scripting/reflected",
+        ],
+    },
+    "sql_error_exposed": {
+        "remediation_steps": [
+            "Nonaktifkan display_errors di PHP production: edit php.ini, set display_errors = Off, log_errors = On.",
+            "Di config.inc.php OJS, pastikan show_errors = Off dan show_stacktrace = Off.",
+            "Konfigurasi halaman error generik di Nginx agar tidak menampilkan detail backend: error_page 500 502 503 504 /50x.html;",
+            "Audit query yang menghasilkan error tersebut dan pastikan menggunakan parameterized query/prepared statement.",
+            "Reload PHP-FPM dan Nginx: sudo systemctl restart php8.1-fpm nginx",
+            "Jalankan ulang scan untuk memastikan pesan error SQL tidak lagi terekspos ke pengguna.",
+        ],
+        "references": [
+            "https://owasp.org/Top10/A03_2021-Injection/",
+            "https://cwe.mitre.org/data/definitions/209.html",
+            "https://cwe.mitre.org/data/definitions/89.html",
+            "https://cheatsheetseries.owasp.org/cheatsheets/Error_Handling_Cheat_Sheet.html",
+        ],
+    },
+    "path_traversal": {
+        "remediation_steps": [
+            "Identifikasi endpoint yang rentan dari 'affected_path' pada temuan.",
+            "Pastikan OJS dan seluruh plugin/dependency dalam keadaan versi terbaru — kerentanan path traversal sering sudah dipatch di rilis terbaru.",
+            "Tambahkan aturan Nginx untuk memblokir pola traversal pada URL: location ~ \\.\\./ { deny all; }",
+            "Validasi dan normalisasi seluruh input path di sisi aplikasi — tolak karakter '../' dan path absolut.",
+            "Batasi permission filesystem agar proses web server tidak dapat membaca file di luar webroot (open_basedir di php.ini).",
+            "Jalankan ulang scan vulnerability prober setelah perbaikan untuk konfirmasi.",
+        ],
+        "references": [
+            "https://owasp.org/Top10/A01_2021-Broken_Access_Control/",
+            "https://cwe.mitre.org/data/definitions/22.html",
+            "https://cheatsheetseries.owasp.org/cheatsheets/Input_Validation_Cheat_Sheet.html",
+        ],
+    },
+    "exposed_git": {
+        "remediation_steps": [
+            "SEGERA: Asumsikan seluruh riwayat kode dan kemungkinan kredensial di repository sudah bocor.",
+            "Hapus direktori .git dari direktori produksi: rm -rf /path/to/ojs/.git (deploy tanpa menyertakan .git ke webroot).",
+            "Blokir akses di Nginx sebagai mitigasi cepat: location ~ /\\.git { deny all; return 404; }",
+            "Audit riwayat commit untuk kredensial/secret yang mungkin pernah ter-commit, dan rotasi semua yang ditemukan.",
+            "Terapkan proses deployment yang memisahkan source control dari direktori webroot (CI/CD yang hanya menyalin artefak build).",
+            "Verifikasi: akses https://<domain>/.git/config — harus mendapat HTTP 403 atau 404.",
+        ],
+        "references": [
+            "https://owasp.org/Top10/A05_2021-Security_Misconfiguration/",
+            "https://cwe.mitre.org/data/definitions/538.html",
+            "https://cheatsheetseries.owasp.org/cheatsheets/Infrastructure_as_Code_Security_Cheat_Sheet.html",
+        ],
+    },
+    "exposed_env_file": {
+        "remediation_steps": [
+            "SEGERA: Asumsikan semua kredensial di .env sudah bocor — mulai rotasi semua password dan API key yang tersimpan di file tersebut.",
+            "Periksa log akses web server (access.log) untuk mengetahui apakah .env sudah pernah diunduh oleh pihak lain.",
+            "Pindahkan file .env ke direktori di luar webroot (satu level di atas direktori public/webroot OJS).",
+            "Jika tidak bisa dipindahkan, blokir akses di Nginx: location ~ /\\.env { deny all; return 404; }",
+            "Untuk Apache: tambahkan di .htaccess: <Files \".env\"> Order allow,deny Deny from all </Files>",
+            "Update semua service yang menggunakan kredensial yang berpotensi terekspos (database, SMTP, API key pihak ketiga).",
+            "Verifikasi perbaikan: akses https://<domain>/.env — harus mendapat HTTP 403 atau 404.",
+        ],
+        "references": [
+            "https://owasp.org/Top10/A05_2021-Security_Misconfiguration/",
+            "https://cwe.mitre.org/data/definitions/538.html",
+            "https://cheatsheetseries.owasp.org/cheatsheets/Infrastructure_as_Code_Security_Cheat_Sheet.html",
+            "https://www.acunetix.com/vulnerabilities/web/env-file-publicly-accessible/",
+        ],
+    },
+    "phpinfo_exposed": {
+        "remediation_steps": [
+            "Identifikasi lokasi file phpinfo() dari 'affected_path' pada temuan (mis. info.php, test.php, phpinfo.php).",
+            "Hapus file tersebut dari server: rm /path/to/ojs/<file>.php",
+            "Audit direktori webroot untuk file uji/debug serupa yang mungkin tertinggal dari proses development.",
+            "Tambahkan aturan deployment yang mencegah file uji ikut ter-deploy ke production (.gitignore, build exclude list).",
+            "Verifikasi: akses https://<domain>/<file>.php — harus mendapat HTTP 404.",
+        ],
+        "references": [
+            "https://owasp.org/Top10/A05_2021-Security_Misconfiguration/",
+            "https://cwe.mitre.org/data/definitions/200.html",
+            "https://cheatsheetseries.owasp.org/cheatsheets/Error_Handling_Cheat_Sheet.html",
+        ],
+    },
+    "open_directory": {
+        "remediation_steps": [
+            "Identifikasi direktori yang directory listing-nya aktif dari 'affected_path' pada temuan.",
+            "Nonaktifkan directory listing di Nginx: pastikan tidak ada directive autoindex on; pada blok location terkait.",
+            "Tambahkan index.html/index.php kosong di direktori yang tidak boleh menampilkan listing sebagai lapisan pertahanan tambahan.",
+            "Batasi akses langsung ke direktori upload/cache: location /files/ { internal; } atau gunakan signed URL.",
+            "Reload Nginx: sudo systemctl reload nginx",
+            "Verifikasi: akses https://<domain>/<direktori>/ — harus mendapat HTTP 403 atau 404, bukan daftar file.",
+        ],
+        "references": [
+            "https://owasp.org/Top10/A05_2021-Security_Misconfiguration/",
+            "https://cwe.mitre.org/data/definitions/548.html",
+            "https://cheatsheetseries.owasp.org/cheatsheets/Securing_Cardholder_Data_Cheat_Sheet.html",
+        ],
+    },
+    "ojs_admin_endpoint_exposed": {
+        "remediation_steps": [
+            "Pastikan halaman login admin (mis. /index.php/index/login) menggunakan HTTPS dan dilindungi rate limiting.",
+            "Tambahkan rate limiting di Nginx: limit_req_zone $binary_remote_addr zone=login:10m rate=5r/m; lalu terapkan di location terkait.",
+            "Aktifkan CAPTCHA pada form login jika tersedia (plugin reCAPTCHA OJS).",
+            "Pertimbangkan membatasi akses endpoint admin hanya dari IP tertentu (VPN/whitelist) menggunakan allow/deny di Nginx.",
+            "Pastikan seluruh akun admin menggunakan password kuat dan, jika tersedia, aktifkan two-factor authentication.",
+        ],
+        "references": [
+            "https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures/",
+            "https://cwe.mitre.org/data/definitions/307.html",
+            "https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html",
+        ],
+    },
+    "ojs_oai_accessible": {
+        "remediation_steps": [
+            "Endpoint OAI-PMH (/oai) bersifat publik by design untuk interoperabilitas metadata jurnal — temuan ini bersifat informatif, bukan kerentanan kritis.",
+            "Tinjau apakah eksposur metadata via OAI-PMH sesuai kebijakan jurnal (beberapa jurnal sengaja mengaktifkan untuk indexing Google Scholar/DOAJ).",
+            "Jika ingin membatasi, konfigurasi akses OAI di Settings → Distribution → Indexing pada panel admin OJS.",
+            "Jika perlu dibatasi di level jaringan, tambahkan whitelist IP untuk harvester tepercaya di Nginx.",
+        ],
+        "references": [
+            "https://docs.pkp.sfu.ca/admin-guide/en/distribution",
+            "https://www.openarchives.org/pmh/",
+        ],
+    },
+    "cookie_missing_secure_flag": {
+        "remediation_steps": [
+            "Set session.cookie_secure = 1 di konfigurasi PHP (php.ini atau .htaccess), agar cookie hanya dikirim melalui HTTPS.",
+            "Untuk Apache .htaccess: php_value session.cookie_secure 1",
+            "Untuk Nginx dengan PHP-FPM: fastcgi_param PHP_VALUE \"session.cookie_secure=1\"; di blok location ~ \\.php$",
+            "Pastikan situs sepenuhnya berjalan di HTTPS sebelum mengaktifkan flag ini agar sesi tidak rusak.",
+            "Verifikasi di browser DevTools → Application → Cookies → kolom Secure harus tercentang.",
+        ],
+        "references": [
+            "https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html",
+            "https://cwe.mitre.org/data/definitions/614.html",
+            "https://owasp.org/Top10/A02_2021-Cryptographic_Failures/",
+        ],
+    },
+    "cookie_missing_httponly_flag": {
+        "remediation_steps": [
+            "Set session.cookie_httponly = 1 di konfigurasi PHP (php.ini atau per-directory .htaccess).",
+            "Untuk Apache .htaccess: tambahkan php_value session.cookie_httponly 1",
+            "Untuk Nginx dengan PHP-FPM: tambahkan fastcgi_param PHP_VALUE \"session.cookie_httponly=1\"; di blok location ~ \\.php$",
+            "Verifikasi di browser DevTools → Application → Cookies → pastikan kolom HttpOnly tercentang untuk cookie OJS.",
+        ],
+        "references": [
+            "https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html",
+            "https://cwe.mitre.org/data/definitions/1004.html",
+            "https://datatracker.ietf.org/doc/html/rfc6265#section-5.2.6",
+        ],
+    },
+    "cookie_missing_samesite": {
+        "remediation_steps": [
+            "Set session.cookie_samesite = Strict di konfigurasi PHP jika jurnal tidak memerlukan cross-site navigation.",
+            "Atau gunakan Lax jika jurnal menggunakan fitur deep-link dari situs eksternal (lebih umum dan aman untuk sebagian besar OJS).",
+            "Untuk Apache .htaccess: php_value session.cookie_samesite \"Lax\"",
+            "Untuk PHP 7.3+: dapat juga diset via ini_set('session.cookie_samesite', 'Lax'); di awal sesi.",
+            "Verifikasi di DevTools → Application → Cookies → kolom SameSite harus menampilkan 'Strict' atau 'Lax'.",
+        ],
+        "references": [
+            "https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html",
+            "https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie/SameSite",
+            "https://cwe.mitre.org/data/definitions/352.html",
+        ],
+    },
+    "cve_ojs": {
+        "remediation_steps": [
+            "Baca advisory keamanan resmi untuk CVE terkait di https://nvd.nist.gov/vuln/detail/ (lihat field cve_id pada temuan).",
+            "Identifikasi versi OJS yang sudah memperbaiki kerentanan ini dari advisory PKP.",
+            "Backup database dan semua file OJS sebelum upgrade: pg_dump ojsdb > backup.sql && tar -czf ojs-backup.tar.gz /path/to/ojs",
+            "Download versi OJS terbaru dari https://pkp.sfu.ca/ojs/ojs_download/",
+            "Ikuti panduan upgrade resmi PKP: https://docs.pkp.sfu.ca/dev/upgrade-guide/",
+            "Setelah upgrade, jalankan php tools/upgrade.php upgrade dari direktori OJS.",
+            "Verifikasi fungsionalitas jurnal setelah upgrade, lalu jalankan ulang scan untuk konfirmasi CVE sudah resolved.",
+        ],
+        "references": [
+            "https://nvd.nist.gov/vuln/detail/",
+            "https://pkp.sfu.ca/category/news/announcements/releases/",
+            "https://forum.pkp.sfu.ca/c/questions-and-answers/security/",
+            "https://docs.pkp.sfu.ca/dev/upgrade-guide/",
+        ],
+    },
+}
