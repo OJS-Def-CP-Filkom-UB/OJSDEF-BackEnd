@@ -39,6 +39,7 @@ class ScanResponse(BaseModel):
     progress: ScanProgress | None = None
     diagnostic_code: str | None = None
     diagnostic_detail: str | None = None
+    module_errors: dict[str, str] = {}
     created_at: datetime
 
 
@@ -51,6 +52,8 @@ class FindingResponse(BaseModel):
     affected_path: str
     evidence: str
     remediation: str
+    references: list[str] = []
+    remediation_steps: list[str] = []
     severity: str
     cvss_score: float
     cve_id: str | None
