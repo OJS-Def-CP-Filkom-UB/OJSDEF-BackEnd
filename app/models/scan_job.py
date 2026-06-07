@@ -23,5 +23,6 @@ class ScanJob(Base, TimestampMixin):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     diagnostic_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
     diagnostic_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    module_errors: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

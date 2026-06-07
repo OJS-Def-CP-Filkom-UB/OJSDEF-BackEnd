@@ -18,6 +18,8 @@ class ScanFinding(Base, TimestampMixin):
     affected_path: Mapped[str] = mapped_column(String(1000), nullable=False)
     evidence: Mapped[str] = mapped_column(Text, nullable=False)
     remediation: Mapped[str] = mapped_column(Text, nullable=False)
+    references: Mapped[str | None] = mapped_column(Text, nullable=True)
+    remediation_steps: Mapped[str | None] = mapped_column(Text, nullable=True)
     severity: Mapped[str] = mapped_column(String(20), nullable=False)
     cvss_score: Mapped[float] = mapped_column(Float, nullable=False)
     cve_id: Mapped[str | None] = mapped_column(String(30), nullable=True)
