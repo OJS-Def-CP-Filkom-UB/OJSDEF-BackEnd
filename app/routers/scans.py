@@ -32,6 +32,26 @@ async def _get_progress(job_id: str) -> dict | None:
     return json.loads(raw) if raw else None
 
 
+def _parse_json_list(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, list) else []
+    except (TypeError, ValueError):
+        return []
+
+
+def _parse_json_dict(raw: str | None) -> dict[str, str]:
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except (TypeError, ValueError):
+        return {}
+
+
 def _to_response(job: ScanJob, progress: dict | None = None) -> ScanResponse:
     parsed_progress: ScanProgress | None = None
     if progress:
@@ -48,6 +68,7 @@ def _to_response(job: ScanJob, progress: dict | None = None) -> ScanResponse:
         medium_count=job.medium_count, low_count=job.low_count,
         diagnostic_code=job.diagnostic_code,
         diagnostic_detail=job.diagnostic_detail,
+        module_errors=_parse_json_dict(job.module_errors),
         progress=parsed_progress, created_at=job.created_at,
     )
 
@@ -184,6 +205,8 @@ async def get_findings(
             evidence=f.evidence, remediation=f.remediation, severity=f.severity,
             cvss_score=f.cvss_score, cve_id=f.cve_id, owasp_category=f.owasp_category,
             is_false_positive=f.is_false_positive,
+            references=_parse_json_list(f.references),
+            remediation_steps=_parse_json_list(f.remediation_steps),
         )
         for f in findings
     ]
@@ -227,6 +250,8 @@ async def mark_false_positive(
         evidence=f.evidence, remediation=f.remediation, severity=f.severity,
         cvss_score=f.cvss_score, cve_id=f.cve_id, owasp_category=f.owasp_category,
         is_false_positive=f.is_false_positive,
+        references=_parse_json_list(f.references),
+        remediation_steps=_parse_json_list(f.remediation_steps),
     )
 
 
