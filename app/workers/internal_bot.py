@@ -199,31 +199,49 @@ async def _run_internal_scan(job_id: str, data: dict) -> None:
     await write_progress(job_id, "internal_audit", 1, 7, "Plugin callback diterima, memproses data audit...", "INFO")
 
     results = data.get("results", {})
+    module_errors: dict[str, str] = {}
+    all_findings: list = []
 
     if await _check_cancelled(job_id): return
     await write_progress(job_id, "internal_audit", 2, 7, "Menganalisis konfigurasi OJS...", "TASK")
-    config_findings = scan_config(results.get("config", {}))
+    try:
+        all_findings += scan_config(results.get("config", {}))
+    except Exception as e:
+        module_errors["config"] = str(e)[:100]
 
     if await _check_cancelled(job_id): return
     await write_progress(job_id, "internal_audit", 3, 7, "Memeriksa plugin yang terpasang...", "TASK")
-    plugin_findings = scan_plugins(results.get("plugins", {}))
+    try:
+        all_findings += scan_plugins(results.get("plugins", {}))
+    except Exception as e:
+        module_errors["plugins"] = str(e)[:100]
 
     if await _check_cancelled(job_id): return
     await write_progress(job_id, "internal_audit", 4, 7, "Mengaudit RBAC dan pengguna...", "TASK")
-    rbac_findings = scan_rbac(results.get("rbac", {}))
+    try:
+        all_findings += scan_rbac(results.get("rbac", {}))
+    except Exception as e:
+        module_errors["rbac"] = str(e)[:100]
 
     if await _check_cancelled(job_id): return
     await write_progress(job_id, "internal_audit", 5, 7, "Memeriksa integritas file...", "TASK")
-    file_findings = scan_file_integrity(results.get("file_integrity", {}))
+    try:
+        fi_data = results.get("file_integrity", {})
+        if fi_data.get("status") == "skipped":
+            module_errors["file_integrity"] = fi_data.get("reason", "checksums_unavailable")
+        else:
+            all_findings += scan_file_integrity(fi_data)
+    except Exception as e:
+        module_errors["file_integrity"] = str(e)[:100]
 
     if await _check_cancelled(job_id): return
     await write_progress(job_id, "internal_audit", 6, 7, "Mendeteksi konten mencurigakan...", "TASK")
-    content_findings = scan_content(results.get("content", {}))
+    try:
+        all_findings += scan_content(results.get("content", {}))
+    except Exception as e:
+        module_errors["content"] = str(e)[:100]
 
-    all_findings = (
-        config_findings + plugin_findings + rbac_findings
-        + file_findings + content_findings
-    )
+    ojs_version = results.get("fingerprint", {}).get("ojs_version")
 
     async with make_worker_session() as session:
         job = (await session.execute(select(ScanJob).where(ScanJob.id == job_id))).scalar_one()
@@ -235,7 +253,16 @@ async def _run_internal_scan(job_id: str, data: dict) -> None:
                 evidence=f.evidence, remediation=f.remediation,
                 severity=f.severity, cvss_score=f.cvss_score,
                 cve_id=f.cve_id, owasp_category=f.owasp_category,
+                references=json.dumps(f.references) if f.references else None,
+                remediation_steps=json.dumps(f.remediation_steps) if f.remediation_steps else None,
             ))
+        job.module_errors = json.dumps(module_errors) if module_errors else None
+
+        if ojs_version and isinstance(ojs_version, str):
+            target = await session.get(OJSTarget, job.target_id)
+            if target and target.ojs_version != ojs_version:
+                target.ojs_version = ojs_version
+
         await session.commit()
 
     if await _check_cancelled(job_id): return
