@@ -1,4 +1,6 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from app.scanners.enrichment import ENRICHMENT_DATA
 
 
 @dataclass
@@ -14,6 +16,8 @@ class FindingResult:
     severity: str           # low|medium|high|critical
     cve_id: str | None = None
     owasp_category: str | None = None
+    references: list[str] = field(default_factory=list)
+    remediation_steps: list[str] = field(default_factory=list)
 
 
 CVSS_SCORES: dict[str, float] = {
@@ -25,12 +29,16 @@ CVSS_SCORES: dict[str, float] = {
     "ojs_version_exposed": 4.0, "outdated_ojs_version": 7.0,
     "ssl_expired": 9.0, "ssl_expiring_soon": 5.0, "weak_tls": 7.5,
     "missing_csp": 6.0, "missing_hsts": 6.5, "missing_x_frame": 5.5,
+    "missing_referrer_policy": 3.1, "missing_permissions_policy": 3.1,
+    "missing_x_content_type_options": 4.3,
     "reflected_xss": 8.5, "sql_error_exposed": 8.0, "path_traversal": 7.5,
     "open_directory": 7.0, "exposed_env_file": 9.5, "exposed_git": 9.0,
     "phpinfo_exposed": 7.0, "cve_ojs": 9.0,
     # New external scanner finding types (C-2)
     "http_no_https_redirect":     8.1,
     "cookie_missing_secure_flag": 3.7,
+    "cookie_missing_httponly_flag": 4.3,
+    "cookie_missing_samesite": 4.3,
     "ojs_admin_endpoint_exposed": 5.8,
     "ojs_oai_accessible":         2.6,
     # New internal scanner finding types (C-1)
@@ -64,6 +72,9 @@ def severity_from_score(score: float) -> str:
 
 def make_finding(finding_type: str, **kwargs) -> FindingResult:
     score = CVSS_SCORES.get(finding_type, 5.0)
+    enrichment = ENRICHMENT_DATA.get(finding_type, {})
+    kwargs.setdefault("references", list(enrichment.get("references", [])))
+    kwargs.setdefault("remediation_steps", list(enrichment.get("remediation_steps", [])))
     return FindingResult(
         finding_type=finding_type,
         cvss_score=score,
